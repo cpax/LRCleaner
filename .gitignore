@@ -1,0 +1,12 @@
+# Ignore log files
+*.log
+
+# Ignore .json files
+*.json
+
+# Ignore .csv files
+*.csv
+
+# Ignore operating system files
+.DS_Store
+Thumbs.db
