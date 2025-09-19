@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LRCleaner - LogRhythm Log Source Management</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1><i class="fas fa-broom"></i> LRCleaner</h1>
+            <p>LogRhythm Log Source Management Tool</p>
+        </header>
+
+        <!-- Configuration Section -->
+        <section class="config-section">
+            <div class="card">
+                <h2><i class="fas fa-cog"></i> Configuration</h2>
+                <form id="configForm">
+                    <div class="form-group">
+                        <label for="hostname">LogRhythm Hostname:</label>
+                        <input type="text" id="hostname" name="hostname" placeholder="lr-server.company.com" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="apiKey">API Key:</label>
+                        <input type="password" id="apiKey" name="apiKey" placeholder="Enter your LogRhythm API key" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="port">Port:</label>
+                        <input type="number" id="port" name="port" value="8501" min="1" max="65535">
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Save Configuration
+                    </button>
+                </form>
+                <div id="configStatus" class="status-message"></div>
+            </div>
+        </section>
+
+        <!-- Control Section -->
+        <section class="control-section">
+            <div class="card">
+                <h2><i class="fas fa-play"></i> Operations</h2>
+                <div class="button-group">
+                    <button id="testModeBtn" class="btn btn-success" disabled>
+                        <i class="fas fa-search"></i> Test Mode
+                    </button>
+                    <button id="applyModeBtn" class="btn btn-warning" disabled>
+                        <i class="fas fa-check"></i> Apply Mode
+                    </button>
+                    <button id="exportBtn" class="btn btn-info" disabled>
+                        <i class="fas fa-download"></i> Export Results
+                    </button>
+                    <button id="clearBtn" class="btn btn-secondary">
+                        <i class="fas fa-trash"></i> Clear Results
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Test Mode Modal -->
+        <div id="testModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3><i class="fas fa-search"></i> Test Mode</h3>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="testDate">Last Log Message Date:</label>
+                        <input type="date" id="testDate" name="testDate" required>
+                    </div>
+                    <button id="startTestBtn" class="btn btn-success">
+                        <i class="fas fa-play"></i> Start Analysis
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Apply Mode Modal -->
+        <div id="applyModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3><i class="fas fa-check"></i> Apply Mode</h3>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="backup-warning">
+                        <div class="warning-icon">
+                            <i class="fas fa-database"></i>
+                        </div>
+                        <div class="warning-content">
+                            <h4>Database Backup Recommendation</h4>
+                            <p>Before making any changes, it's highly recommended to backup the LogRhythmEMDB database. This will allow you to restore the system if needed.</p>
+                            <div class="backup-options">
+                                <button id="performBackupBtn" class="btn btn-primary">
+                                    <i class="fas fa-download"></i> Perform Backup
+                                </button>
+                                <button id="skipBackupBtn" class="btn btn-secondary">
+                                    <i class="fas fa-forward"></i> Skip Backup
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SQL Backup Modal -->
+        <div id="backupModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3><i class="fas fa-database"></i> Database Backup</h3>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="backup-info">
+                        <p><strong>Backup Target:</strong> LogRhythmEMDB</p>
+                        <p><strong>User:</strong> logrhythmadmin</p>
+                        <p><strong>Purpose:</strong> Create a backup before retiring log sources</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="backupPassword">Password for logrhythmadmin:</label>
+                        <input type="password" id="backupPassword" name="backupPassword" placeholder="Enter password" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="backupLocation">Backup Location (optional):</label>
+                        <input type="text" id="backupLocation" name="backupLocation" placeholder="Default: C:\LogRhythm\Backup" value="C:\LogRhythm\Backup">
+                    </div>
+                    <div class="modal-actions">
+                        <button id="executeBackupBtn" class="btn btn-primary">
+                            <i class="fas fa-download"></i> Execute Backup
+                        </button>
+                        <button id="cancelBackupBtn" class="btn btn-secondary">
+                            <i class="fas fa-times"></i> Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Apply Configuration Modal -->
+        <div id="applyConfigModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3><i class="fas fa-cog"></i> Apply Configuration</h3>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="applyDate">Last Log Message Date:</label>
+                        <input type="date" id="applyDate" name="applyDate" required>
+                    </div>
+                    <div class="modal-actions">
+                        <button id="startApplyBtn" class="btn btn-warning">
+                            <i class="fas fa-play"></i> Analyze Hosts
+                        </button>
+                        <button id="backToBackupBtn" class="btn btn-secondary">
+                            <i class="fas fa-arrow-left"></i> Back to Backup
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Host Selection Modal -->
+        <div id="hostSelectionModal" class="modal">
+            <div class="modal-content large-modal">
+                <div class="modal-header">
+                    <h3><i class="fas fa-list-check"></i> Select Hosts for Retirement</h3>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="host-selection-controls">
+                        <div class="select-all-controls">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="selectAllHosts">
+                                <span class="checkmark"></span>
+                                Select All Recommended Hosts
+                            </label>
+                            <button id="selectAllBtn" class="btn btn-secondary btn-sm">
+                                <i class="fas fa-check-double"></i> Select All
+                            </button>
+                            <button id="deselectAllBtn" class="btn btn-secondary btn-sm">
+                                <i class="fas fa-times"></i> Deselect All
+                            </button>
+                        </div>
+                        <div class="host-summary" id="hostSummary"></div>
+                    </div>
+                    <div class="host-list" id="hostList">
+                        <!-- Hosts will be populated here -->
+                    </div>
+                    <div class="modal-actions">
+                        <button id="executeRetirementBtn" class="btn btn-warning" disabled>
+                            <i class="fas fa-check"></i> Execute Retirement
+                        </button>
+                        <button id="cancelRetirementBtn" class="btn btn-secondary">
+                            <i class="fas fa-times"></i> Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Congratulations Modal -->
+        <div id="congratulationsModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header success-header">
+                    <h3><i class="fas fa-trophy"></i> Congratulations!</h3>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="success-content">
+                        <div class="success-icon">
+                            <i class="fas fa-check-circle"></i>
+                        </div>
+                        <h4>Retirement Process Completed Successfully!</h4>
+                        <div class="retirement-summary" id="retirementSummary">
+                            <!-- Summary will be populated here -->
+                        </div>
+                        <div class="action-buttons">
+                            <button id="exportReportBtn" class="btn btn-primary">
+                                <i class="fas fa-file-text"></i> Export Report
+                            </button>
+                            <button id="closeCongratulationsBtn" class="btn btn-secondary">
+                                <i class="fas fa-times"></i> Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+            </div>
+        </div>
+
+        <!-- Host Selection Modal -->
+        <div id="hostSelectionModal" class="modal">
+            <div class="modal-content large-modal">
+                <div class="modal-header">
+                    <h3><i class="fas fa-list-check"></i> Select Hosts for Retirement</h3>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="backup-warning">
+                        <div class="warning-icon">
+                            <i class="fas fa-exclamation-triangle"></i>
+                        </div>
+                        <div class="warning-content">
+                            <h4>Important: Backup Recommendation</h4>
+                            <p>Before proceeding with retirement, it is strongly recommended to backup the LogRhythmEMDB database:</p>
+                            <ol>
+                                <li>Stop LogRhythm services</li>
+                                <li>Backup the LogRhythmEMDB database</li>
+                                <li>Document the backup location and timestamp</li>
+                                <li>Restart LogRhythm services</li>
+                            </ol>
+                            <p><strong>This backup will allow you to restore the system if needed.</strong></p>
+                        </div>
+                    </div>
+                    <div class="host-selection-controls">
+                        <div class="select-all-controls">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="selectAllHosts">
+                                <span class="checkmark"></span>
+                                Select All Recommended Hosts
+                            </label>
+                            <button id="selectAllBtn" class="btn btn-secondary btn-sm">
+                                <i class="fas fa-check-double"></i> Select All
+                            </button>
+                            <button id="deselectAllBtn" class="btn btn-secondary btn-sm">
+                                <i class="fas fa-times"></i> Deselect All
+                            </button>
+                        </div>
+                        <div class="host-summary" id="hostSummary"></div>
+                    </div>
+                    <div class="host-list" id="hostList">
+                        <!-- Hosts will be populated here -->
+                    </div>
+                    <div class="modal-actions">
+                        <button id="executeRetirementBtn" class="btn btn-warning" disabled>
+                            <i class="fas fa-check"></i> Execute Retirement
+                        </button>
+                        <button id="cancelRetirementBtn" class="btn btn-secondary">
+                            <i class="fas fa-times"></i> Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Congratulations Modal -->
+        <div id="congratulationsModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header success-header">
+                    <h3><i class="fas fa-trophy"></i> Congratulations!</h3>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="success-content">
+                        <div class="success-icon">
+                            <i class="fas fa-check-circle"></i>
+                        </div>
+                        <h4>Retirement Process Completed Successfully!</h4>
+                        <div class="retirement-summary" id="retirementSummary">
+                            <!-- Summary will be populated here -->
+                        </div>
+                        <div class="action-buttons">
+                            <button id="exportPDFBtn" class="btn btn-primary">
+                                <i class="fas fa-file-pdf"></i> Export PDF Report
+                            </button>
+                            <button id="undoChangesBtn" class="btn btn-warning">
+                                <i class="fas fa-undo"></i> Undo Changes
+                            </button>
+                            <button id="closeCongratulationsBtn" class="btn btn-secondary">
+                                <i class="fas fa-times"></i> Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Progress Section -->
+        <section class="progress-section" id="progressSection" style="display: none;">
+            <div class="card">
+                <h2><i class="fas fa-tasks"></i> Progress</h2>
+                <div class="progress-bar">
+                    <div id="progressFill" class="progress-fill"></div>
+                </div>
+                <div id="progressText" class="progress-text">Ready</div>
+                <div id="jobStatus" class="job-status"></div>
+            </div>
+        </section>
+
+        <!-- Results Section -->
+        <section class="results-section">
+            <div class="card">
+                <h2><i class="fas fa-table"></i> Results</h2>
+                <div class="results-controls">
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="searchInput" placeholder="Search results...">
+                    </div>
+                    <div class="filter-box">
+                        <select id="pingFilter">
+                            <option value="">All Ping Results</option>
+                            <option value="Success">Success</option>
+                            <option value="Failure">Failure</option>
+                            <option value="Unknown">Unknown</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table id="resultsTable">
+                        <thead>
+                            <tr>
+                                <th>Log Source ID</th>
+                                <th>Host ID</th>
+                                <th>Host Name</th>
+                                <th>Max Log Date</th>
+                                <th>Ping Result</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsBody">
+                            <tr>
+                                <td colspan="5" class="no-results">No results yet. Run Test Mode to analyze log sources.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="resultsSummary" class="results-summary"></div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay" style="display: none;">
+        <div class="loading-spinner">
+            <i class="fas fa-spinner fa-spin"></i>
+            <p>Processing...</p>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
