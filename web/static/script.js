@@ -27,6 +27,9 @@ function initializeApp() {
 }
 
 function setupEventListeners() {
+    // Settings button
+    document.getElementById('settingsBtn').addEventListener('click', openSettingsModal);
+    
     // Configuration form
     document.getElementById('configForm').addEventListener('submit', handleConfigSubmit);
     
@@ -102,14 +105,29 @@ function loadConfiguration() {
             document.getElementById('port').value = config.port || 8501;
             document.getElementById('apiKey').value = config.apiKey || '';
             
-            // Enable buttons if configuration is valid
+            // Check if configuration is valid
             const isValid = config.hostname && config.apiKey && config.apiKey !== '';
-            document.getElementById('testModeBtn').disabled = !isValid;
-            document.getElementById('applyModeBtn').disabled = !isValid;
+            console.log('Configuration loaded:', { hostname: config.hostname, hasApiKey: !!config.apiKey, isValid });
+            
+            if (isValid) {
+                // Show main content and hide settings modal
+                console.log('Showing main content - valid config found');
+                showMainContent();
+                document.getElementById('testModeBtn').disabled = false;
+                document.getElementById('applyModeBtn').disabled = false;
+            } else {
+                // Show settings modal if no valid config
+                console.log('Showing settings modal - no valid config');
+                showSettingsModal();
+                document.getElementById('testModeBtn').disabled = true;
+                document.getElementById('applyModeBtn').disabled = true;
+            }
         })
         .catch(error => {
             console.error('Error loading configuration:', error);
             showToast('Error loading configuration', 'error');
+            // Show settings modal on error
+            showSettingsModal();
         });
 }
 
@@ -147,11 +165,32 @@ function handleConfigSubmit(e) {
         showToast('Configuration saved successfully!', 'success');
         document.getElementById('testModeBtn').disabled = false;
         document.getElementById('applyModeBtn').disabled = false;
+        closeAllModals();
+        showMainContent();
     })
     .catch(error => {
         console.error('Error saving configuration:', error);
         showToast('Error saving configuration', 'error');
     });
+}
+
+function showMainContent() {
+    console.log('showMainContent called');
+    document.getElementById('mainContent').style.display = 'block';
+    document.getElementById('settingsModal').style.display = 'none';
+    console.log('Main content should now be visible');
+}
+
+function hideMainContent() {
+    document.getElementById('mainContent').style.display = 'none';
+}
+
+function showSettingsModal() {
+    document.getElementById('settingsModal').style.display = 'block';
+}
+
+function openSettingsModal() {
+    showSettingsModal();
 }
 
 function openTestModal() {
@@ -166,6 +205,12 @@ function closeAllModals() {
     document.querySelectorAll('.modal').forEach(modal => {
         modal.style.display = 'none';
     });
+    // Ensure main content is visible when closing modals (unless we're in initial setup)
+    const hostname = document.getElementById('hostname').value;
+    const apiKey = document.getElementById('apiKey').value;
+    if (hostname && apiKey && apiKey !== '') {
+        showMainContent();
+    }
 }
 
 function startTestMode() {
@@ -514,12 +559,6 @@ function startApplyMode() {
         console.error('Error starting apply mode:', error);
         hideLoadingOverlay();
         showToast('Error starting host analysis', 'error');
-    });
-}
-
-function closeAllModals() {
-    document.querySelectorAll('.modal').forEach(modal => {
-        modal.style.display = 'none';
     });
 }
 

@@ -20,9 +20,21 @@ body {
 
 /* Header */
 .header {
-    text-align: center;
     margin-bottom: 30px;
     color: white;
+}
+
+.header-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.header-title {
+    text-align: center;
+    flex: 1;
 }
 
 .header h1 {
@@ -34,6 +46,28 @@ body {
 .header p {
     font-size: 1.2rem;
     opacity: 0.9;
+}
+
+.settings-btn {
+    background: rgba(255, 255, 255, 0.2);
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    width: 50px;
+    height: 50px;
+    color: white;
+    font-size: 1.2rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(10px);
+}
+
+.settings-btn:hover {
+    background: rgba(255, 255, 255, 0.3);
+    border-color: rgba(255, 255, 255, 0.5);
+    transform: rotate(90deg);
 }
 
 /* Cards */
@@ -683,6 +717,20 @@ tr:hover {
 @media (max-width: 768px) {
     .container {
         padding: 10px;
+    }
+    
+    .header-content {
+        flex-direction: column;
+        gap: 15px;
+    }
+    
+    .header-title {
+        order: 1;
+    }
+    
+    .settings-btn {
+        order: 2;
+        align-self: flex-end;
     }
     
     .header h1 {
