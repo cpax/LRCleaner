@@ -92,9 +92,13 @@ function showAnalysisSection() {
     // Hide settings section and show analysis section
     const settingsSection = document.getElementById('settingsSection');
     const analysisSection = document.getElementById('analysisSection');
+    const controlSection = document.querySelector('.control-section');
+    const resultsSection = document.querySelector('.results-section');
     
     if (settingsSection) settingsSection.style.display = 'none';
     if (analysisSection) analysisSection.style.display = 'block';
+    if (controlSection) controlSection.style.display = 'block';
+    if (resultsSection) resultsSection.style.display = 'block';
     
     console.log('Showing analysis section');
 }
@@ -103,8 +107,12 @@ function showSettingsSection() {
     // Hide analysis section and show settings section
     const settingsSection = document.getElementById('settingsSection');
     const analysisSection = document.getElementById('analysisSection');
+    const controlSection = document.querySelector('.control-section');
+    const resultsSection = document.querySelector('.results-section');
     
     if (analysisSection) analysisSection.style.display = 'none';
+    if (controlSection) controlSection.style.display = 'none';
+    if (resultsSection) resultsSection.style.display = 'none';
     if (settingsSection) settingsSection.style.display = 'block';
     
     console.log('Showing settings section');
@@ -167,6 +175,14 @@ function initializeApp() {
         testDateElement.value = today;
     }
     
+    // Set default date to 90 days ago for main date picker
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+    const mainDateElement = document.getElementById('mainDate');
+    if (mainDateElement) {
+        mainDateElement.value = ninetyDaysAgo.toISOString().split('T')[0];
+    }
+    
     // Show analysis section by default
     showAnalysisSection();
     
@@ -215,24 +231,7 @@ function setupEventListeners() {
         backupSkipBtn.addEventListener('click', handleBackupSkip);
     }
     
-    // Specific close button for settings modal
-    const settingsModal = document.getElementById('settingsModal');
-    if (settingsModal) {
-        const closeBtn = settingsModal.querySelector('.close');
-        if (closeBtn) {
-            console.log('Setting up close button for settings modal');
-            closeBtn.addEventListener('click', function(e) {
-                console.log('Settings modal close button clicked!');
-                e.preventDefault();
-                e.stopPropagation();
-                closeAllModals();
-            });
-        } else {
-            console.log('Close button not found in settings modal');
-        }
-    } else {
-        console.log('Settings modal not found');
-    }
+    // Settings section doesn't have a close button - it's shown/hidden via navigation
     
     // Specific close button for test modal
     const testModal = document.getElementById('testModal');
@@ -253,24 +252,7 @@ function setupEventListeners() {
         console.log('Test modal not found');
     }
     
-    // Specific close button for apply modal
-    const applyModal = document.getElementById('applyModal');
-    if (applyModal) {
-        const closeBtn = applyModal.querySelector('.close');
-        if (closeBtn) {
-            console.log('Setting up close button for apply modal');
-            closeBtn.addEventListener('click', function(e) {
-                console.log('Apply modal close button clicked!');
-                e.preventDefault();
-                e.stopPropagation();
-                closeAllModals();
-            });
-        } else {
-            console.log('Close button not found in apply modal');
-        }
-    } else {
-        console.log('Apply modal not found');
-    }
+    // Apply modal was removed - no longer needed
     
     // Configuration form
     document.getElementById('configForm').addEventListener('submit', handleConfigSubmit);
@@ -279,51 +261,103 @@ function setupEventListeners() {
     document.getElementById('testConnectionBtn').addEventListener('click', handleTestConnection);
     
     // Control buttons
-    document.getElementById('testModeBtn').addEventListener('click', openTestModal);
-    document.getElementById('applyModeBtn').addEventListener('click', openApplyModal);
-    document.getElementById('exportBtn').addEventListener('click', handleExport);
-    document.getElementById('clearBtn').addEventListener('click', clearResults);
+    const testModeBtn = document.getElementById('testModeBtn');
+    if (testModeBtn) testModeBtn.addEventListener('click', openTestModal);
+    
+    const applyModeBtn = document.getElementById('applyModeBtn');
+    if (applyModeBtn) applyModeBtn.addEventListener('click', startApplyMode);
+    
+    const applyBtn = document.getElementById('applyBtn');
+    if (applyBtn) applyBtn.addEventListener('click', handleApply);
+    
+    const exportBtn = document.getElementById('exportBtn');
+    if (exportBtn) exportBtn.addEventListener('click', handleExport);
+    
+    const clearBtn = document.getElementById('clearBtn');
+    if (clearBtn) clearBtn.addEventListener('click', clearResults);
     
     // Test modal
-    document.getElementById('startTestBtn').addEventListener('click', startTestMode);
+    const startTestBtn = document.getElementById('startTestBtn');
+    if (startTestBtn) startTestBtn.addEventListener('click', startTestMode);
     
     // Apply modal
-    document.getElementById('performBackupBtn').addEventListener('click', openBackupModal);
-    document.getElementById('skipBackupBtn').addEventListener('click', openApplyConfigModal);
+    const performBackupBtn = document.getElementById('performBackupBtn');
+    if (performBackupBtn) performBackupBtn.addEventListener('click', openBackupModal);
+    
+    const skipBackupBtn = document.getElementById('skipBackupBtn');
+    if (skipBackupBtn) skipBackupBtn.addEventListener('click', openApplyConfigModal);
     
     // Backup modal
-    document.getElementById('executeBackupBtn').addEventListener('click', executeBackup);
-    document.getElementById('cancelBackupBtn').addEventListener('click', closeAllModals);
+    const executeBackupBtn = document.getElementById('executeBackupBtn');
+    if (executeBackupBtn) executeBackupBtn.addEventListener('click', executeBackup);
+    
+    const cancelBackupBtn = document.getElementById('cancelBackupBtn');
+    if (cancelBackupBtn) cancelBackupBtn.addEventListener('click', closeAllModals);
     
     // Apply config modal
-    document.getElementById('startApplyBtn').addEventListener('click', startApplyMode);
-    document.getElementById('backToBackupBtn').addEventListener('click', backToBackupModal);
+    const startApplyBtn = document.getElementById('startApplyBtn');
+    if (startApplyBtn) startApplyBtn.addEventListener('click', startApplyMode);
+    
+    const backToBackupBtn = document.getElementById('backToBackupBtn');
+    if (backToBackupBtn) backToBackupBtn.addEventListener('click', backToBackupModal);
     
     // Host selection modal
-    document.getElementById('selectAllHosts').addEventListener('change', handleSelectAllRecommended);
-    document.getElementById('selectAllBtn').addEventListener('click', selectAllHosts);
-    document.getElementById('deselectAllBtn').addEventListener('click', deselectAllHosts);
-    document.getElementById('executeRetirementBtn').addEventListener('click', executeRetirement);
-    document.getElementById('cancelRetirementBtn').addEventListener('click', cancelRetirement);
+    const selectAllHosts = document.getElementById('selectAllHosts');
+    if (selectAllHosts) selectAllHosts.addEventListener('change', handleSelectAllRecommended);
+    
+    const selectAllBtn = document.getElementById('selectAllBtn');
+    if (selectAllBtn) selectAllBtn.addEventListener('click', selectAllHosts);
+    
+    const deselectAllBtn = document.getElementById('deselectAllBtn');
+    if (deselectAllBtn) deselectAllBtn.addEventListener('click', deselectAllHosts);
+    
+    const executeRetirementBtn = document.getElementById('executeRetirementBtn');
+    if (executeRetirementBtn) executeRetirementBtn.addEventListener('click', executeRetirement);
+    
+    const cancelRetirementBtn = document.getElementById('cancelRetirementBtn');
+    if (cancelRetirementBtn) cancelRetirementBtn.addEventListener('click', cancelRetirement);
     
     // Collection host modal
-    document.getElementById('selectAllCollectionHosts').addEventListener('change', handleSelectAllRecommendedCollectionHosts);
-    document.getElementById('selectAllCollectionHostsBtn').addEventListener('click', selectAllCollectionHosts);
-    document.getElementById('deselectAllCollectionHostsBtn').addEventListener('click', deselectAllCollectionHosts);
-    document.getElementById('executeCollectionHostRetirementBtn').addEventListener('click', executeCollectionHostRetirement);
-    document.getElementById('cancelCollectionHostRetirementBtn').addEventListener('click', closeAllModals);
+    const selectAllCollectionHosts = document.getElementById('selectAllCollectionHosts');
+    if (selectAllCollectionHosts) selectAllCollectionHosts.addEventListener('change', handleSelectAllRecommendedCollectionHosts);
+    
+    const selectAllCollectionHostsBtn = document.getElementById('selectAllCollectionHostsBtn');
+    if (selectAllCollectionHostsBtn) selectAllCollectionHostsBtn.addEventListener('click', selectAllCollectionHosts);
+    
+    const deselectAllCollectionHostsBtn = document.getElementById('deselectAllCollectionHostsBtn');
+    if (deselectAllCollectionHostsBtn) deselectAllCollectionHostsBtn.addEventListener('click', deselectAllCollectionHosts);
+    
+    const executeCollectionHostRetirementBtn = document.getElementById('executeCollectionHostRetirementBtn');
+    if (executeCollectionHostRetirementBtn) executeCollectionHostRetirementBtn.addEventListener('click', executeCollectionHostRetirement);
+    
+    const cancelCollectionHostRetirementBtn = document.getElementById('cancelCollectionHostRetirementBtn');
+    if (cancelCollectionHostRetirementBtn) cancelCollectionHostRetirementBtn.addEventListener('click', closeAllModals);
     
     // Host selection modal filters
-    document.getElementById('hostSearchInput').addEventListener('input', filterHostResults);
-    document.getElementById('hostPingFilter').addEventListener('change', filterHostResults);
-    document.getElementById('hostLogSourceTypeFilter').addEventListener('change', filterHostResults);
-    document.getElementById('hostLogSourceNameFilter').addEventListener('change', filterHostResults);
-    document.getElementById('clearHostFiltersBtn').addEventListener('click', clearHostFilters);
+    const hostSearchInput = document.getElementById('hostSearchInput');
+    if (hostSearchInput) hostSearchInput.addEventListener('input', filterHostResults);
+    
+    const hostPingFilter = document.getElementById('hostPingFilter');
+    if (hostPingFilter) hostPingFilter.addEventListener('change', filterHostResults);
+    
+    const hostLogSourceTypeFilter = document.getElementById('hostLogSourceTypeFilter');
+    if (hostLogSourceTypeFilter) hostLogSourceTypeFilter.addEventListener('change', filterHostResults);
+    
+    const hostLogSourceNameFilter = document.getElementById('hostLogSourceNameFilter');
+    if (hostLogSourceNameFilter) hostLogSourceNameFilter.addEventListener('change', filterHostResults);
+    
+    const clearHostFiltersBtn = document.getElementById('clearHostFiltersBtn');
+    if (clearHostFiltersBtn) clearHostFiltersBtn.addEventListener('click', clearHostFilters);
     
     // Congratulations modal
-    document.getElementById('exportPDFBtn').addEventListener('click', exportPDFReport);
-    document.getElementById('undoChangesBtn').addEventListener('click', undoChanges);
-    document.getElementById('closeCongratulationsBtn').addEventListener('click', closeAllModals);
+    const exportPDFBtn = document.getElementById('exportPDFBtn');
+    if (exportPDFBtn) exportPDFBtn.addEventListener('click', exportPDFReport);
+    
+    const undoChangesBtn = document.getElementById('undoChangesBtn');
+    if (undoChangesBtn) undoChangesBtn.addEventListener('click', undoChanges);
+    
+    const closeCongratulationsBtn = document.getElementById('closeCongratulationsBtn');
+    if (closeCongratulationsBtn) closeCongratulationsBtn.addEventListener('click', closeAllModals);
     
     // Modal close handlers - using event delegation for better reliability
     document.addEventListener('click', function(e) {
@@ -359,8 +393,8 @@ function setupEventListeners() {
         modal.addEventListener('click', function(e) {
             if (e.target === this) {
                 console.log('Clicked outside modal:', modal.id);
-                if (modal.id === 'settingsModal') {
-                    console.log('Closing settings modal via click outside');
+                if (modal.id === 'settingsSection') {
+                    console.log('Closing settings section via click outside');
                     modal.style.display = 'none';
                 } else {
                     closeAllModals();
@@ -376,14 +410,14 @@ function setupEventListeners() {
             e.preventDefault();
             e.stopPropagation();
             
-            // Check if settings modal is open
-            const settingsModal = document.getElementById('settingsModal');
-            if (settingsModal && settingsModal.style.display === 'block') {
-                console.log('Settings modal is open - closing it');
-                settingsModal.style.display = 'none';
-                console.log('Settings modal closed via escape key');
+            // Check if settings section is open
+            const settingsSection = document.getElementById('settingsSection');
+            if (settingsSection && settingsSection.style.display === 'block') {
+                console.log('Settings section is open - closing it');
+                settingsSection.style.display = 'none';
+                console.log('Settings section closed via escape key');
             } else {
-                console.log('No settings modal open - using closeAllModals');
+                console.log('No settings section open - using closeAllModals');
                 closeAllModals();
             }
         }
@@ -396,58 +430,100 @@ function setupEventListeners() {
             e.preventDefault();
             e.stopPropagation();
             
-            const settingsModal = document.getElementById('settingsModal');
-            if (settingsModal && settingsModal.style.display === 'block') {
-                console.log('Closing settings modal via window escape handler');
-                settingsModal.style.display = 'none';
+            const settingsSection = document.getElementById('settingsSection');
+            if (settingsSection && settingsSection.style.display === 'block') {
+                console.log('Closing settings section via window escape handler');
+                settingsSection.style.display = 'none';
             }
         }
     });
     
     // Search and filter
-    document.getElementById('searchInput').addEventListener('input', filterResults);
-    document.getElementById('pingFilter').addEventListener('change', filterResults);
-    document.getElementById('logSourceTypeFilter').addEventListener('change', filterResults);
-    document.getElementById('logSourceNameFilter').addEventListener('change', filterResults);
-    document.getElementById('clearFiltersBtn').addEventListener('click', clearFilters);
+    const searchInput = document.getElementById('searchInput');
+    if (searchInput) searchInput.addEventListener('input', filterResults);
+    
+    const pingFilter = document.getElementById('pingFilter');
+    if (pingFilter) pingFilter.addEventListener('change', filterResults);
+    
+    const logSourceTypeFilter = document.getElementById('logSourceTypeFilter');
+    if (logSourceTypeFilter) logSourceTypeFilter.addEventListener('change', filterResults);
+    
+    const logSourceNameFilter = document.getElementById('logSourceNameFilter');
+    if (logSourceNameFilter) logSourceNameFilter.addEventListener('change', filterResults);
+    
+    const clearFiltersBtn = document.getElementById('clearFiltersBtn');
+    if (clearFiltersBtn) clearFiltersBtn.addEventListener('click', clearFilters);
 }
 
 function loadConfiguration() {
+    console.log('loadConfiguration called - fetching /api/config');
     fetch('/api/config')
-        .then(response => response.json())
+        .then(response => {
+            console.log('loadConfiguration response status:', response.status);
+            if (!response.ok) {
+                console.log('HTTP error status:', response.status);
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(config => {
+            if (!config) {
+                console.log('No configuration data - showing settings modal');
+                showSettingsSection();
+                return;
+            }
+            
             document.getElementById('hostname').value = config.hostname || '';
             document.getElementById('port').value = config.port || 8501;
             document.getElementById('apiKey').value = config.apiKey || '';
             
-            // Check if configuration is valid
-            const isValid = config.hostname && config.apiKey && config.apiKey !== '';
-            console.log('Configuration loaded:', { hostname: config.hostname, hasApiKey: !!config.apiKey, isValid });
+            // Check if configuration is valid (has real values, not just defaults)
+            const isValid = config.hostname && 
+                           config.hostname !== 'localhost' && 
+                           config.apiKey && 
+                           config.apiKey !== '';
+            console.log('Configuration loaded:', { 
+                hostname: config.hostname, 
+                hasApiKey: !!config.apiKey, 
+                isValid,
+                isDefaultHostname: config.hostname === 'localhost'
+            });
             
             if (isValid) {
-                // Show main content and hide settings modal
+                // Show main content and hide settings section
                 console.log('Showing main content - valid config found');
                 showMainContent();
-                document.getElementById('testModeBtn').disabled = false;
-                document.getElementById('applyModeBtn').disabled = false;
+                const applyModeBtn = document.getElementById('applyModeBtn');
+                if (applyModeBtn) applyModeBtn.disabled = false;
             } else {
-                // Show settings modal if no valid config
-                console.log('Showing settings modal - no valid config');
-                showSettingsModal();
-                document.getElementById('testModeBtn').disabled = true;
-                document.getElementById('applyModeBtn').disabled = true;
+                // Show settings section if no valid config (including default values)
+                console.log('Showing settings section - no valid config (default or empty values)');
+                showSettingsSection();
+                const applyModeBtn = document.getElementById('applyModeBtn');
+                if (applyModeBtn) applyModeBtn.disabled = true;
             }
         })
         .catch(error => {
             console.error('Error loading configuration:', error);
             showToast('Error loading configuration', 'error');
             // Show settings modal on error
-            showSettingsModal();
+            showSettingsSection();
         });
 }
 
+let isSubmittingConfig = false;
+
 function handleConfigSubmit(e) {
     e.preventDefault();
+    e.stopPropagation();
+    
+    // Prevent double submission
+    if (isSubmittingConfig) {
+        console.log('Configuration submission already in progress, ignoring duplicate');
+        return;
+    }
+    
+    isSubmittingConfig = true;
     
     const formData = new FormData(e.target);
     const config = {
@@ -459,15 +535,18 @@ function handleConfigSubmit(e) {
     // Validate configuration
     if (!config.hostname) {
         showToast('Hostname is required', 'error');
+        isSubmittingConfig = false;
         return;
     }
     
-    if (!config.apiKey || config.apiKey.length < 400) {
-        showToast('API key must be at least 400 characters', 'error');
+    if (!config.apiKey || config.apiKey.length < 10) {
+        showToast('API key must be at least 10 characters', 'error');
+        isSubmittingConfig = false;
         return;
     }
     
     // Save configuration
+    console.log('Sending configuration save request:', config);
     fetch('/api/config', {
         method: 'POST',
         headers: {
@@ -475,17 +554,36 @@ function handleConfigSubmit(e) {
         },
         body: JSON.stringify(config)
     })
-    .then(response => response.json())
+    .then(response => {
+        console.log('Configuration save response status:', response.status);
+        console.log('Configuration save response headers:', response.headers);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        // Check if response has content
+        const contentType = response.headers.get('content-type');
+        console.log('Response content-type:', contentType);
+        
+        if (contentType && contentType.includes('application/json')) {
+            return response.json();
+        } else {
+            // If not JSON, just return success
+            console.log('Response is not JSON, treating as success');
+            return { status: 'success' };
+        }
+    })
     .then(data => {
+        console.log('Configuration save successful:', data);
         showToast('Configuration saved successfully!', 'success');
-        document.getElementById('testModeBtn').disabled = false;
-        document.getElementById('applyModeBtn').disabled = false;
-        closeAllModals();
+        const applyModeBtn = document.getElementById('applyModeBtn');
+        if (applyModeBtn) applyModeBtn.disabled = false;
         showMainContent();
+        isSubmittingConfig = false;
     })
     .catch(error => {
         console.error('Error saving configuration:', error);
         showToast('Error saving configuration', 'error');
+        isSubmittingConfig = false;
     });
 }
 
@@ -553,7 +651,10 @@ function handleTestConnection() {
 function showMainContent() {
     console.log('showMainContent called');
     document.getElementById('mainContent').style.display = 'block';
-    document.getElementById('settingsModal').style.display = 'none';
+    const settingsSection = document.getElementById('settingsSection');
+    if (settingsSection) {
+        settingsSection.style.display = 'none';
+    }
     console.log('Main content should now be visible');
 }
 
@@ -561,12 +662,21 @@ function hideMainContent() {
     document.getElementById('mainContent').style.display = 'none';
 }
 
-function showSettingsModal() {
-    document.getElementById('settingsModal').style.display = 'block';
-}
-
-function openSettingsModal() {
-    showSettingsModal();
+function showSettingsSection() {
+    const settingsSection = document.getElementById('settingsSection');
+    if (settingsSection) {
+        settingsSection.style.display = 'block';
+        // Hide other sections
+        const analysisSection = document.getElementById('analysisSection');
+        const controlSection = document.querySelector('.control-section');
+        const resultsSection = document.querySelector('.results-section');
+        
+        if (analysisSection) analysisSection.style.display = 'none';
+        if (controlSection) controlSection.style.display = 'none';
+        if (resultsSection) resultsSection.style.display = 'none';
+    } else {
+        console.log('Settings section not found');
+    }
 }
 
 
@@ -644,7 +754,7 @@ function startTestMode() {
 }
 
 function startApplyMode() {
-    const date = document.getElementById('applyDate').value;
+    const date = document.getElementById('mainDate').value;
     if (!date) {
         showToast('Please select a date', 'error');
         return;
@@ -673,6 +783,12 @@ function startApplyMode() {
         hideLoadingOverlay();
         showToast('Error starting host analysis', 'error');
     });
+}
+
+function handleApply() {
+    // TODO: Implement apply functionality
+    console.log('Apply functionality not yet implemented');
+    showToast('Apply functionality will be implemented soon!', 'info');
 }
 
 function handleExport() {

@@ -16,24 +16,13 @@
         </div>
         <nav class="sidebar-nav">
             <div class="nav-section">
-                <h3><i class="fas fa-search"></i> <span class="sidebar-text">Analysis</span></h3>
-                <ul>
-                    <li><a href="#" id="analyzeNav" class="nav-link active" title="Analyze Log Sources">
-                        <i class="fas fa-chart-line"></i> <span class="sidebar-text">Analyze Log Sources</span>
-                    </a></li>
-                    <li><a href="#" id="exportNav" class="nav-link" title="Export Results">
-                        <i class="fas fa-download"></i> <span class="sidebar-text">Export Results</span>
-                    </a></li>
-                </ul>
-            </div>
-            <div class="nav-section">
                 <h3><i class="fas fa-tools"></i> <span class="sidebar-text">Operations</span></h3>
                 <ul>
-                    <li><a href="#" id="retireNav" class="nav-link" title="Retire Log Sources">
-                        <i class="fas fa-archive"></i> <span class="sidebar-text">Retire Log Sources</span>
+                    <li><a href="#" id="analyzeNav" class="nav-link active" title="Analyze">
+                        <i class="fas fa-chart-line"></i> <span class="sidebar-text">Analyze</span>
                     </a></li>
-                    <li><a href="#" id="rollbackNav" class="nav-link" title="Rollback Retirements">
-                        <i class="fas fa-undo"></i> <span class="sidebar-text">Rollback Retirements</span>
+                    <li><a href="#" id="rollbackNav" class="nav-link" title="Rollback">
+                        <i class="fas fa-undo"></i> <span class="sidebar-text">Rollback</span>
                     </a></li>
                 </ul>
             </div>
@@ -123,20 +112,22 @@
         <!-- Control Section -->
         <section class="control-section">
             <div class="card">
-                <h2><i class="fas fa-play"></i> Operations</h2>
-                <div class="button-group">
-                    <button id="testModeBtn" class="btn btn-success" disabled>
-                        <i class="fas fa-search"></i> Test Mode
-                    </button>
-                    <button id="applyModeBtn" class="btn btn-warning" disabled>
-                        <i class="fas fa-check"></i> Analyze
-                    </button>
-                    <button id="exportBtn" class="btn btn-info" disabled>
-                        <i class="fas fa-download"></i> Export Results
-                    </button>
-                    <button id="clearBtn" class="btn btn-secondary">
-                        <i class="fas fa-trash"></i> Clear Results
-                    </button>
+                <div class="control-row">
+                    <div class="date-picker-group">
+                        <label for="mainDate">Last Log Message Date:</label>
+                        <input type="date" id="mainDate" name="mainDate" required>
+                    </div>
+                    <div class="button-group">
+                        <button id="applyModeBtn" class="btn btn-success" disabled>
+                            <i class="fas fa-play"></i> Go
+                        </button>
+                        <button id="applyBtn" class="btn btn-danger" disabled>
+                            <i class="fas fa-check"></i> Apply
+                        </button>
+                        <button id="clearBtn" class="btn btn-secondary">
+                            <i class="fas fa-trash"></i> Clear Results
+                        </button>
+                    </div>
                 </div>
             </div>
         </section>
@@ -160,34 +151,6 @@
             </div>
         </div>
 
-        <!-- Apply Mode Modal -->
-        <div id="applyModal" class="modal">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h3><i class="fas fa-check"></i> Apply Mode</h3>
-                    <span class="close">&times;</span>
-                </div>
-                <div class="modal-body">
-                    <div class="backup-warning">
-                        <div class="warning-icon">
-                            <i class="fas fa-database"></i>
-                        </div>
-                        <div class="warning-content">
-                            <h4>Database Backup Recommendation</h4>
-                            <p>Before making any changes, it's highly recommended to backup the LogRhythmEMDB database. This will allow you to restore the system if needed.</p>
-                            <div class="backup-options">
-                                <button id="performBackupBtn" class="btn btn-primary">
-                                    <i class="fas fa-download"></i> Perform Backup
-                                </button>
-                                <button id="skipBackupBtn" class="btn btn-secondary">
-                                    <i class="fas fa-forward"></i> Skip Backup
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
 
         <!-- SQL Backup Modal -->
         <div id="backupModal" class="modal">

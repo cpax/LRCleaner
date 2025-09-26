@@ -281,7 +281,7 @@ func main() {
 func loadConfig() *Config {
 	config := &Config{
 		Hostname: "localhost",
-		Port:     8500,
+		Port:     8501,
 		ExcludedLogSources: []string{
 			"Open Collector",
 			"Echo",
