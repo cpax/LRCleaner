@@ -1,0 +1,656 @@
+LRCleaner - API Calls Documentation
+===================================
+
+OVERVIEW
+--------
+This document details all API calls made by LRCleaner to the LogRhythm API and internal application endpoints.
+
+LOGRHYTHM API CALLS
+===================
+
+Base Configuration:
+- Protocol: HTTPS
+- Port: 8501 (default, configurable)
+- Authentication: Bearer Token (API Key)
+- SSL Verification: Disabled (InsecureSkipVerify: true)
+- Timeout: 30 seconds
+- Content-Type: application/json
+
+1. GET LOG SOURCES
+-----------------
+Purpose: Fetch all log sources from LogRhythm
+
+Endpoint: GET /lr-admin-api/logsources
+Parameters:
+- count: 1000 (batch size)
+- offset: 0, 1000, 2000, etc. (pagination)
+
+Headers:
+- Authorization: Bearer {API_KEY}
+- Content-Type: application/json
+
+Example Request:
+GET https://{hostname}:8501/lr-admin-api/logsources?count=1000&offset=0
+Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+
+Response Format (Array):
+[
+  {
+    "id": "12345",
+    "name": "Windows Event Log",
+    "recordStatus": "Active",
+    "maxLogDate": "2024-01-15T10:30:00Z",
+    "host": {
+      "id": "67890",
+      "name": "server01.company.com"
+    },
+    "logSourceType": {
+      "name": "Windows Event Log"
+    },
+    "systemMonitorId": "11111",
+    "systemMonitorName": "collector01.company.com"
+  }
+]
+
+Response Format (Object - Alternative):
+{
+  "count": 1000,
+  "items": [...]
+}
+
+2. GET SINGLE LOG SOURCE
+------------------------
+Purpose: Fetch specific log source details for retirement
+
+Endpoint: GET /lr-admin-api/logsources/{logSourceId}
+
+Headers:
+- Authorization: Bearer {API_KEY}
+- Content-Type: application/json
+
+Example Request:
+GET https://{hostname}:8501/lr-admin-api/logsources/12345
+Authorization: Bearer {API_KEY}
+
+3. UPDATE LOG SOURCE (Retirement)
+---------------------------------
+Purpose: Retire a log source
+
+Endpoint: PUT /lr-admin-api/logsources/{logSourceId}
+
+Headers:
+- Authorization: Bearer {API_KEY}
+- Content-Type: application/json
+
+Request Body (Full Log Source Object):
+{
+  "id": "12345",
+  "name": "Windows Event Log Retired by LRCleaner",
+  "recordStatus": "Retired",
+  "maxLogDate": "2024-01-15T10:30:00Z",
+  "host": {
+    "id": "67890",
+    "name": "server01.company.com"
+  },
+  "logSourceType": {
+    "name": "Windows Event Log"
+  },
+  "systemMonitorId": "11111",
+  "systemMonitorName": "collector01.company.com"
+  // ... all other fields from GET request
+}
+
+4. GET HOST DETAILS
+-------------------
+Purpose: Fetch host information for retirement
+
+Endpoint: GET /lr-admin-api/hosts/{hostId}
+
+Headers:
+- Authorization: Bearer {API_KEY}
+- Content-Type: application/json
+
+Example Request:
+GET https://{hostname}:8501/lr-admin-api/hosts/67890
+Authorization: Bearer {API_KEY}
+
+5. UPDATE HOST (Retirement)
+---------------------------
+Purpose: Retire a host
+
+Endpoint: PUT /lr-admin-api/hosts/{hostId}
+
+Headers:
+- Authorization: Bearer {API_KEY}
+- Content-Type: application/json
+
+Request Body (Modified Host Object):
+{
+  "id": "67890",
+  "name": "server01.company.com Retired by LRCleaner",
+  "recordStatusName": "Retired",
+  // ... all other fields from GET request
+  // Note: Remove hostRoles and hostIdentifiers fields
+}
+
+6. REMOVE HOST IDENTIFIERS
+--------------------------
+Purpose: Remove IP address identifiers from host
+
+Endpoint: DELETE /lr-admin-api/hosts/{hostId}/identifiers
+
+Headers:
+- Authorization: Bearer {API_KEY}
+- Content-Type: application/json
+
+Request Body:
+{
+  "hostIdentifiers": [
+    {
+      "type": "IPAddress",
+      "value": "192.168.1.100"
+    },
+    {
+      "type": "IPAddress", 
+      "value": "10.0.0.50"
+    }
+  ]
+}
+
+7. GET SYSTEM MONITOR (AGENT)
+-----------------------------
+Purpose: Fetch system monitor details for retirement
+
+Endpoint: GET /lr-admin-api/agents/{systemMonitorId}
+
+Headers:
+- Authorization: Bearer {API_KEY}
+- Content-Type: application/json
+
+Example Request:
+GET https://{hostname}:8501/lr-admin-api/agents/11111
+Authorization: Bearer {API_KEY}
+
+8. UNLICENSE SYSTEM MONITOR
+---------------------------
+Purpose: Unlicense a system monitor before retirement
+
+Endpoint: PUT /lr-admin-api/agents/{systemMonitorId}
+
+Headers:
+- Authorization: Bearer {API_KEY}
+- Content-Type: application/json
+
+Request Body (Modified Agent Object):
+{
+  "id": "11111",
+  "name": "collector01.company.com",
+  "recordStatusName": "Unlicensed",
+  // ... all other fields from GET request
+}
+
+9. RETIRE SYSTEM MONITOR
+------------------------
+Purpose: Retire a system monitor
+
+Endpoint: PUT /lr-admin-api/agents/{systemMonitorId}
+
+Headers:
+- Authorization: Bearer {API_KEY}
+- Content-Type: application/json
+
+Request Body (Modified Agent Object):
+{
+  "id": "11111",
+  "name": "collector01.company.com",
+  "recordStatusName": "Retired",
+  "licenseType": "None",
+  // ... all other fields from GET request
+}
+
+10. GET LOG SOURCES BY HOST
+---------------------------
+Purpose: Check if host has remaining active log sources
+
+Endpoint: GET /lr-admin-api/logsources?hostId={hostId}&recordStatus=active
+
+Headers:
+- Authorization: Bearer {API_KEY}
+- Content-Type: application/json
+
+Example Request:
+GET https://{hostname}:8501/lr-admin-api/logsources?hostId=67890&recordStatus=active
+Authorization: Bearer {API_KEY}
+
+11. GET LOG SOURCES BY SYSTEM MONITOR
+------------------------------------
+Purpose: Check if system monitor has remaining active log sources
+
+Endpoint: GET /lr-admin-api/logsources?systemMonitorId={systemMonitorId}&recordStatus=active
+
+Headers:
+- Authorization: Bearer {API_KEY}
+- Content-Type: application/json
+
+Example Request:
+GET https://{hostname}:8501/lr-admin-api/logsources?systemMonitorId=11111&recordStatus=active
+Authorization: Bearer {API_KEY}
+
+12. TEST CONNECTION
+------------------
+Purpose: Test LogRhythm API connectivity
+
+Endpoint: GET /lr-admin-api/logsources?count=1&offset=0
+
+Headers:
+- Authorization: Bearer {API_KEY}
+- Content-Type: application/json
+
+Example Request:
+GET https://{hostname}:8501/lr-admin-api/logsources?count=1&offset=0
+Authorization: Bearer {API_KEY}
+
+INTERNAL APPLICATION API ENDPOINTS
+==================================
+
+Base URL: http://localhost:{port}
+Content-Type: application/json
+
+1. GET CONFIGURATION
+-------------------
+Purpose: Get current application configuration
+
+Endpoint: GET /api/config
+
+Response:
+{
+  "hostname": "lr-server.company.com",
+  "apiKey": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "port": 8501,
+  "excludedLogSources": [
+    "Open Collector",
+    "Echo",
+    "AI Engine",
+    "LogRhythm System"
+  ]
+}
+
+2. UPDATE CONFIGURATION
+-----------------------
+Purpose: Update application configuration
+
+Endpoint: POST /api/config
+
+Request Body:
+{
+  "hostname": "lr-server.company.com",
+  "apiKey": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "port": 8501,
+  "excludedLogSources": [
+    "Open Collector",
+    "Echo",
+    "AI Engine",
+    "LogRhythm System"
+  ]
+}
+
+Response:
+{
+  "status": "success"
+}
+
+3. TEST CONNECTION
+-----------------
+Purpose: Test connection to LogRhythm API
+
+Endpoint: POST /api/test-connection
+
+Request Body:
+{
+  "hostname": "lr-server.company.com",
+  "apiKey": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "port": 8501
+}
+
+Response (Success):
+{
+  "success": true,
+  "message": "Connection successful! LogRhythm API is accessible."
+}
+
+Response (Error):
+{
+  "success": false,
+  "error": "Connection failed: dial tcp: connection refused"
+}
+
+4. START TEST MODE
+-----------------
+Purpose: Start log source analysis (read-only)
+
+Endpoint: POST /api/test
+
+Request Body:
+{
+  "date": "2024-01-01"
+}
+
+Response:
+{
+  "jobId": "test_1704067200"
+}
+
+5. START APPLY MODE
+------------------
+Purpose: Start host analysis for retirement
+
+Endpoint: POST /api/apply
+
+Request Body:
+{
+  "date": "2024-01-01"
+}
+
+Response:
+{
+  "jobId": "apply_1704067200"
+}
+
+6. EXECUTE RETIREMENT
+--------------------
+Purpose: Execute retirement of selected hosts
+
+Endpoint: POST /api/apply/execute
+
+Request Body:
+{
+  "selectedHosts": ["67890", "67891", "67892"]
+}
+
+Response:
+{
+  "jobId": "execute_1704067200"
+}
+
+7. RETIRE COLLECTION HOSTS
+-------------------------
+Purpose: Retire selected collection hosts
+
+Endpoint: POST /api/collection-hosts/retire
+
+Request Body:
+{
+  "selectedCollectionHosts": ["11111", "11112"]
+}
+
+Response:
+{
+  "message": "Collection host retirement initiated for 2 hosts"
+}
+
+8. PERFORM DATABASE BACKUP
+-------------------------
+Purpose: Create SQL Server database backup
+
+Endpoint: POST /api/backup
+
+Request Body:
+{
+  "password": "logrhythmadmin_password",
+  "location": "C:\\LogRhythm\\Backup"
+}
+
+Response (Success):
+{
+  "success": true,
+  "message": "Database backup completed successfully"
+}
+
+Response (Error):
+{
+  "success": false,
+  "error": "Failed to connect to database: login failed"
+}
+
+9. GET JOB STATUS
+----------------
+Purpose: Get status of background job
+
+Endpoint: GET /api/jobs/{jobId}
+
+Response (Test Mode):
+{
+  "id": "test_1704067200",
+  "status": "completed",
+  "progress": 100,
+  "message": "Analysis complete. Found 150 sources.",
+  "results": [
+    {
+      "id": "12345",
+      "hostId": "67890",
+      "hostName": "server01.company.com",
+      "name": "Windows Event Log",
+      "logSourceType": "Windows Event Log",
+      "maxLogDate": "2024-01-15T10:30:00Z",
+      "pingResult": "Failure"
+    }
+  ],
+  "startTime": "2024-01-01T10:00:00Z",
+  "endTime": "2024-01-01T10:05:00Z"
+}
+
+Response (Apply Mode):
+{
+  "id": "apply_1704067200",
+  "status": "completed",
+  "progress": 100,
+  "message": "Host analysis complete. Found 25 hosts.",
+  "hostAnalysis": [
+    {
+      "hostId": "67890",
+      "hostName": "server01.company.com",
+      "logSourceCount": 5,
+      "maxLogDate": "2024-01-15T10:30:00Z",
+      "pingResult": "Failure",
+      "recommended": true,
+      "logSources": [...]
+    }
+  ],
+  "startTime": "2024-01-01T10:00:00Z",
+  "endTime": "2024-01-01T10:05:00Z"
+}
+
+Response (Retirement):
+{
+  "id": "execute_1704067200",
+  "status": "completed",
+  "progress": 100,
+  "message": "Retirement complete. Processed 15 log sources across 3 hosts.",
+  "retirementRecords": [
+    {
+      "logSourceId": "12345",
+      "hostId": "67890",
+      "hostName": "server01.company.com",
+      "originalName": "Windows Event Log",
+      "retiredName": "Windows Event Log Retired by LRCleaner",
+      "originalStatus": "Active",
+      "retiredStatus": "Retired",
+      "timestamp": "2024-01-01T10:05:00Z"
+    }
+  ],
+  "collectionHostAnalysis": [...],
+  "startTime": "2024-01-01T10:00:00Z",
+  "endTime": "2024-01-01T10:10:00Z"
+}
+
+10. EXPORT RESULTS
+-----------------
+Purpose: Export analysis results as CSV
+
+Endpoint: GET /api/export/{jobId}
+
+Response: CSV file download
+Content-Type: text/csv
+Content-Disposition: attachment; filename="LRCleaner_Results_{jobId}.csv"
+
+CSV Format:
+ID,HostID,HostName,MaxLogDate,PingResult
+12345,67890,server01.company.com,2024-01-15T10:30:00Z,Failure
+
+11. EXPORT PDF REPORT
+--------------------
+Purpose: Export retirement report as text file
+
+Endpoint: GET /api/export/pdf/{jobId}
+
+Response: Text file download
+Content-Type: text/plain
+Content-Disposition: attachment; filename="LRCleaner_Report_{jobId}.txt"
+
+12. WEBSOCKET CONNECTION
+-----------------------
+Purpose: Real-time job status updates
+
+Endpoint: GET /ws
+Protocol: WebSocket
+
+Connection Process:
+1. Client connects to /ws
+2. Server upgrades HTTP to WebSocket
+3. Server sends current job statuses
+4. Server broadcasts job updates as they occur
+5. Client receives JSON job status objects
+
+Message Format (Server to Client):
+{
+  "id": "test_1704067200",
+  "status": "running",
+  "progress": 45,
+  "message": "Testing connectivity to 150 hosts...",
+  "startTime": "2024-01-01T10:00:00Z"
+}
+
+STATIC FILE SERVING
+===================
+
+1. MAIN HTML PAGE
+----------------
+Endpoint: GET /
+Response: HTML file (index.html)
+
+2. STATIC ASSETS
+---------------
+Endpoint: GET /static/{filename}
+Examples:
+- GET /static/style.css
+- GET /static/script.js
+
+Response: Static file content with appropriate Content-Type
+
+SQL SERVER DATABASE CALLS
+=========================
+
+Connection String:
+server=localhost;user id=logrhythmadmin;password={password};database=LogRhythmEMDB;encrypt=disable
+
+1. DATABASE BACKUP
+-----------------
+SQL Command:
+BACKUP DATABASE [LogRhythmEMDB] TO DISK = '{backupFile}' WITH FORMAT, INIT, NAME = 'LogRhythmEMDB Full Backup', SKIP, NOREWIND, NOUNLOAD, STATS = 10
+
+Parameters:
+- backupFile: Full path to backup file (e.g., C:\LogRhythm\Backup\LogRhythmEMDB_backup_20240101_100000.bak)
+
+ERROR HANDLING
+==============
+
+HTTP Status Codes:
+- 200: Success
+- 400: Bad Request (invalid JSON, missing parameters)
+- 404: Not Found (job not found, file not found)
+- 500: Internal Server Error
+
+LogRhythm API Errors:
+- 401: Unauthorized (invalid API key)
+- 403: Forbidden (insufficient permissions)
+- 404: Not Found (resource doesn't exist)
+- 500: Internal Server Error (LogRhythm server error)
+
+Common Error Responses:
+{
+  "success": false,
+  "error": "Connection failed: dial tcp: connection refused"
+}
+
+{
+  "success": false,
+  "error": "API returned status code: 401"
+}
+
+{
+  "success": false,
+  "error": "Invalid JSON"
+}
+
+AUTHENTICATION
+==============
+
+LogRhythm API:
+- Bearer Token authentication
+- API key in Authorization header
+- No session management
+- Token expiration handled by LogRhythm
+
+Internal API:
+- No authentication (localhost only)
+- Configuration stored in plain text
+- No user management
+
+RATE LIMITING AND PERFORMANCE
+=============================
+
+Concurrent Connections:
+- Max 50 concurrent ping operations
+- HTTP client with connection pooling
+- Background job processing
+
+Timeout Settings:
+- HTTP client timeout: 30 seconds
+- Ping timeout: 500ms per port test
+- Database connection timeout: 10 seconds
+
+Batch Processing:
+- Log sources fetched in batches of 1000
+- Pagination with offset parameter
+- Memory-efficient processing
+
+CACHING AND STATE MANAGEMENT
+============================
+
+In-Memory Storage:
+- Job status tracking
+- WebSocket connections
+- Configuration (reloaded on restart)
+
+No Persistent Caching:
+- LogRhythm API calls are not cached
+- Fresh data on each analysis
+- Real-time connectivity testing
+
+SECURITY CONSIDERATIONS
+=======================
+
+API Key Storage:
+- Stored in plain text in config.json
+- No encryption (local file only)
+- Should be protected by file system permissions
+
+SSL/TLS:
+- LogRhythm API: Skip verification (InsecureSkipVerify)
+- Internal API: HTTP only (localhost)
+- No certificate validation
+
+Network Security:
+- Localhost-only web interface
+- No external network exposure
+- Firewall-friendly (outbound HTTPS only)

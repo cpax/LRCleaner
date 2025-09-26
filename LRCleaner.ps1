@@ -322,7 +322,14 @@ function Test-Section {
         $sourceType = $_.logSourceType.name
         $logSourceName = $_.name
         $maxLogDate = [datetime]$_.maxLogDate
+        $recordStatus = $_.recordStatus
         $matchFound = $false
+        
+        # Skip already retired log sources
+        if ($recordStatus -eq "Retired") {
+            $matchFound = $true
+        }
+        
         foreach ($exclusion in $global:excludedLogSources) {
             if ($sourceType -imatch $exclusion) {
                 $matchFound = $true

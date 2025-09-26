@@ -1,10 +1,158 @@
 // Global variables
 let currentJobId = null;
 let websocket = null;
+let hostGroups = {};
 let allResults = [];
 let hostAnalysis = [];
 let selectedHosts = [];
 let retirementRecords = [];
+let collectionHostAnalysis = [];
+let selectedCollectionHosts = [];
+
+// Debug: Check if script is loading
+console.log('LRCleaner script loaded - version 2');
+
+// Sidebar functionality
+function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const mainContent = document.getElementById('mainContent');
+    
+    if (sidebar && mainContent) {
+        // Check if we're on mobile
+        const isMobile = window.innerWidth <= 768;
+        
+        if (isMobile) {
+            // On mobile, toggle open/closed state
+            sidebar.classList.toggle('open');
+        } else {
+            // On desktop, toggle collapsed/expanded state
+            sidebar.classList.toggle('collapsed');
+        }
+        
+        // Update toggle button icon
+        const toggleIcon = sidebar.querySelector('.sidebar-toggle i');
+        if (toggleIcon) {
+            if (sidebar.classList.contains('collapsed') || sidebar.classList.contains('open')) {
+                toggleIcon.style.transform = 'rotate(180deg)';
+            } else {
+                toggleIcon.style.transform = 'rotate(0deg)';
+            }
+        }
+    }
+}
+
+function navigateToSection(navId) {
+    // Remove active class from all nav links
+    const navLinks = document.querySelectorAll('.nav-link');
+    navLinks.forEach(link => link.classList.remove('active'));
+    
+    // Add active class to clicked link
+    const activeLink = document.getElementById(navId);
+    if (activeLink) {
+        activeLink.classList.add('active');
+    }
+    
+    // Close sidebar on mobile after navigation
+    const isMobile = window.innerWidth <= 768;
+    if (isMobile) {
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar) {
+            sidebar.classList.remove('open');
+        }
+    }
+    
+    // Handle navigation based on navId
+    switch(navId) {
+        case 'analyzeNav':
+            // Show analysis section (default view)
+            showAnalysisSection();
+            break;
+        case 'exportNav':
+            // Handle export functionality
+            handleExport();
+            break;
+        case 'retireNav':
+            // Handle retirement functionality
+            handleRetirement();
+            break;
+        case 'rollbackNav':
+            // Handle rollback functionality
+            handleRollback();
+            break;
+        case 'settingsNav':
+            // Show settings section
+            showSettingsSection();
+            break;
+        default:
+            console.log('Unknown navigation:', navId);
+    }
+}
+
+function showAnalysisSection() {
+    // Hide settings section and show analysis section
+    const settingsSection = document.getElementById('settingsSection');
+    const analysisSection = document.getElementById('analysisSection');
+    
+    if (settingsSection) settingsSection.style.display = 'none';
+    if (analysisSection) analysisSection.style.display = 'block';
+    
+    console.log('Showing analysis section');
+}
+
+function showSettingsSection() {
+    // Hide analysis section and show settings section
+    const settingsSection = document.getElementById('settingsSection');
+    const analysisSection = document.getElementById('analysisSection');
+    
+    if (analysisSection) analysisSection.style.display = 'none';
+    if (settingsSection) settingsSection.style.display = 'block';
+    
+    console.log('Showing settings section');
+}
+
+function handleExport() {
+    // TODO: Implement export functionality
+    console.log('Export functionality not yet implemented');
+    alert('Export functionality will be implemented soon!');
+}
+
+function handleRetirement() {
+    // TODO: Implement retirement functionality
+    console.log('Retirement functionality not yet implemented');
+    alert('Retirement functionality will be implemented soon!');
+}
+
+function handleRollback() {
+    // TODO: Implement rollback functionality
+    console.log('Rollback functionality not yet implemented');
+    alert('Rollback functionality will be implemented soon!');
+}
+
+function handleBackupAcknowledge() {
+    const backupStatus = document.getElementById('backupStatus');
+    if (backupStatus) {
+        backupStatus.innerHTML = '<i class="fas fa-check-circle"></i> Database backup acknowledged. You may proceed with retirement operations.';
+        backupStatus.className = 'status-message success';
+    }
+    
+    // Store acknowledgment in localStorage
+    localStorage.setItem('backupAcknowledged', 'true');
+    
+    console.log('Database backup acknowledged');
+}
+
+function handleBackupSkip() {
+    const backupStatus = document.getElementById('backupStatus');
+    if (backupStatus) {
+        backupStatus.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Database backup skipped. Proceeding without backup is not recommended.';
+        backupStatus.className = 'status-message error';
+    }
+    
+    // Store skip in localStorage
+    localStorage.setItem('backupSkipped', 'true');
+    
+    console.log('Database backup skipped');
+}
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', function() {
@@ -14,7 +162,13 @@ document.addEventListener('DOMContentLoaded', function() {
 function initializeApp() {
     // Set default date to today
     const today = new Date().toISOString().split('T')[0];
-    document.getElementById('testDate').value = today;
+    const testDateElement = document.getElementById('testDate');
+    if (testDateElement) {
+        testDateElement.value = today;
+    }
+    
+    // Show analysis section by default
+    showAnalysisSection();
     
     // Load current configuration
     loadConfiguration();
@@ -23,15 +177,106 @@ function initializeApp() {
     setupEventListeners();
     
     // Connect to WebSocket
+    console.log('About to connect to WebSocket...');
     connectWebSocket();
 }
 
 function setupEventListeners() {
-    // Settings button
-    document.getElementById('settingsBtn').addEventListener('click', openSettingsModal);
+    // Sidebar toggle
+    const sidebarToggle = document.getElementById('sidebarToggle');
+    if (sidebarToggle) {
+        sidebarToggle.addEventListener('click', toggleSidebar);
+    }
+    
+    // Navigation links
+    const navLinks = document.querySelectorAll('.nav-link');
+    navLinks.forEach(link => {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            const navId = this.id;
+            navigateToSection(navId);
+        });
+    });
+    
+    // Settings button (if it exists)
+    const settingsBtn = document.getElementById('settingsBtn');
+    if (settingsBtn) {
+        settingsBtn.addEventListener('click', openSettingsModal);
+    }
+    
+    // Backup buttons
+    const backupAcknowledgeBtn = document.getElementById('backupAcknowledgeBtn');
+    if (backupAcknowledgeBtn) {
+        backupAcknowledgeBtn.addEventListener('click', handleBackupAcknowledge);
+    }
+    
+    const backupSkipBtn = document.getElementById('backupSkipBtn');
+    if (backupSkipBtn) {
+        backupSkipBtn.addEventListener('click', handleBackupSkip);
+    }
+    
+    // Specific close button for settings modal
+    const settingsModal = document.getElementById('settingsModal');
+    if (settingsModal) {
+        const closeBtn = settingsModal.querySelector('.close');
+        if (closeBtn) {
+            console.log('Setting up close button for settings modal');
+            closeBtn.addEventListener('click', function(e) {
+                console.log('Settings modal close button clicked!');
+                e.preventDefault();
+                e.stopPropagation();
+                closeAllModals();
+            });
+        } else {
+            console.log('Close button not found in settings modal');
+        }
+    } else {
+        console.log('Settings modal not found');
+    }
+    
+    // Specific close button for test modal
+    const testModal = document.getElementById('testModal');
+    if (testModal) {
+        const closeBtn = testModal.querySelector('.close');
+        if (closeBtn) {
+            console.log('Setting up close button for test modal');
+            closeBtn.addEventListener('click', function(e) {
+                console.log('Test modal close button clicked!');
+                e.preventDefault();
+                e.stopPropagation();
+                closeAllModals();
+            });
+        } else {
+            console.log('Close button not found in test modal');
+        }
+    } else {
+        console.log('Test modal not found');
+    }
+    
+    // Specific close button for apply modal
+    const applyModal = document.getElementById('applyModal');
+    if (applyModal) {
+        const closeBtn = applyModal.querySelector('.close');
+        if (closeBtn) {
+            console.log('Setting up close button for apply modal');
+            closeBtn.addEventListener('click', function(e) {
+                console.log('Apply modal close button clicked!');
+                e.preventDefault();
+                e.stopPropagation();
+                closeAllModals();
+            });
+        } else {
+            console.log('Close button not found in apply modal');
+        }
+    } else {
+        console.log('Apply modal not found');
+    }
     
     // Configuration form
     document.getElementById('configForm').addEventListener('submit', handleConfigSubmit);
+    
+    // Test connection button
+    document.getElementById('testConnectionBtn').addEventListener('click', handleTestConnection);
     
     // Control buttons
     document.getElementById('testModeBtn').addEventListener('click', openTestModal);
@@ -59,42 +304,112 @@ function setupEventListeners() {
     document.getElementById('selectAllBtn').addEventListener('click', selectAllHosts);
     document.getElementById('deselectAllBtn').addEventListener('click', deselectAllHosts);
     document.getElementById('executeRetirementBtn').addEventListener('click', executeRetirement);
-    document.getElementById('cancelRetirementBtn').addEventListener('click', closeAllModals);
+    document.getElementById('cancelRetirementBtn').addEventListener('click', cancelRetirement);
     
-    // Congratulations modal
-    document.getElementById('exportReportBtn').addEventListener('click', exportReport);
-    document.getElementById('closeCongratulationsBtn').addEventListener('click', closeAllModals);
+    // Collection host modal
+    document.getElementById('selectAllCollectionHosts').addEventListener('change', handleSelectAllRecommendedCollectionHosts);
+    document.getElementById('selectAllCollectionHostsBtn').addEventListener('click', selectAllCollectionHosts);
+    document.getElementById('deselectAllCollectionHostsBtn').addEventListener('click', deselectAllCollectionHosts);
+    document.getElementById('executeCollectionHostRetirementBtn').addEventListener('click', executeCollectionHostRetirement);
+    document.getElementById('cancelCollectionHostRetirementBtn').addEventListener('click', closeAllModals);
     
-    // Modal close handlers
-    document.querySelectorAll('.close').forEach(closeBtn => {
-        closeBtn.addEventListener('click', closeAllModals);
-    });
-    
-    // Apply modal
-    document.getElementById('startApplyBtn').addEventListener('click', startApplyMode);
-    
-    // Host selection modal
-    document.getElementById('selectAllHosts').addEventListener('change', handleSelectAllRecommended);
-    document.getElementById('selectAllBtn').addEventListener('click', selectAllHosts);
-    document.getElementById('deselectAllBtn').addEventListener('click', deselectAllHosts);
-    document.getElementById('executeRetirementBtn').addEventListener('click', executeRetirement);
-    document.getElementById('cancelRetirementBtn').addEventListener('click', closeAllModals);
+    // Host selection modal filters
+    document.getElementById('hostSearchInput').addEventListener('input', filterHostResults);
+    document.getElementById('hostPingFilter').addEventListener('change', filterHostResults);
+    document.getElementById('hostLogSourceTypeFilter').addEventListener('change', filterHostResults);
+    document.getElementById('hostLogSourceNameFilter').addEventListener('change', filterHostResults);
+    document.getElementById('clearHostFiltersBtn').addEventListener('click', clearHostFilters);
     
     // Congratulations modal
     document.getElementById('exportPDFBtn').addEventListener('click', exportPDFReport);
     document.getElementById('undoChangesBtn').addEventListener('click', undoChanges);
     document.getElementById('closeCongratulationsBtn').addEventListener('click', closeAllModals);
     
+    // Modal close handlers - using event delegation for better reliability
+    document.addEventListener('click', function(e) {
+        if (e.target.classList.contains('close')) {
+            console.log('Close button clicked via delegation:', e.target);
+            e.preventDefault();
+            e.stopPropagation();
+            
+            // Find which modal this close button belongs to
+            const modal = e.target.closest('.modal');
+            if (modal) {
+                console.log('Closing modal via delegation:', modal.id);
+                modal.style.display = 'none';
+            } else {
+                console.log('Modal not found, using closeAllModals');
+                closeAllModals();
+            }
+        }
+    });
+    
+    // Also try the original approach as backup
+    document.querySelectorAll('.close').forEach(closeBtn => {
+        closeBtn.addEventListener('click', function(e) {
+            console.log('Close button clicked via direct listener:', e.target);
+            e.preventDefault();
+            e.stopPropagation();
+            closeAllModals();
+        });
+    });
+    
     // Modal click outside to close
     document.querySelectorAll('.modal').forEach(modal => {
         modal.addEventListener('click', function(e) {
-            if (e.target === this) closeAllModals();
+            if (e.target === this) {
+                console.log('Clicked outside modal:', modal.id);
+                if (modal.id === 'settingsModal') {
+                    console.log('Closing settings modal via click outside');
+                    modal.style.display = 'none';
+                } else {
+                    closeAllModals();
+                }
+            }
         });
+    });
+    
+    // Escape key to close modals - using multiple approaches for reliability
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' || e.keyCode === 27) {
+            console.log('Escape key pressed - checking for open modals');
+            e.preventDefault();
+            e.stopPropagation();
+            
+            // Check if settings modal is open
+            const settingsModal = document.getElementById('settingsModal');
+            if (settingsModal && settingsModal.style.display === 'block') {
+                console.log('Settings modal is open - closing it');
+                settingsModal.style.display = 'none';
+                console.log('Settings modal closed via escape key');
+            } else {
+                console.log('No settings modal open - using closeAllModals');
+                closeAllModals();
+            }
+        }
+    });
+    
+    // Additional escape key handler for better compatibility
+    window.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' || e.keyCode === 27) {
+            console.log('Window escape key pressed');
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const settingsModal = document.getElementById('settingsModal');
+            if (settingsModal && settingsModal.style.display === 'block') {
+                console.log('Closing settings modal via window escape handler');
+                settingsModal.style.display = 'none';
+            }
+        }
     });
     
     // Search and filter
     document.getElementById('searchInput').addEventListener('input', filterResults);
     document.getElementById('pingFilter').addEventListener('change', filterResults);
+    document.getElementById('logSourceTypeFilter').addEventListener('change', filterResults);
+    document.getElementById('logSourceNameFilter').addEventListener('change', filterResults);
+    document.getElementById('clearFiltersBtn').addEventListener('click', clearFilters);
 }
 
 function loadConfiguration() {
@@ -174,6 +489,67 @@ function handleConfigSubmit(e) {
     });
 }
 
+function handleTestConnection() {
+    const formData = new FormData(document.getElementById('configForm'));
+    const config = {
+        hostname: formData.get('hostname'),
+        apiKey: formData.get('apiKey'),
+        port: parseInt(formData.get('port'))
+    };
+    
+    // Validate configuration
+    if (!config.hostname) {
+        showToast('Please enter a hostname first', 'error');
+        return;
+    }
+    
+    if (!config.apiKey) {
+        showToast('Please enter an API key first', 'error');
+        return;
+    }
+    
+    // Show loading state
+    const testBtn = document.getElementById('testConnectionBtn');
+    const originalText = testBtn.innerHTML;
+    testBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testing...';
+    testBtn.disabled = true;
+    
+    // Test connection
+    fetch('/api/test-connection', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(config)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast(data.message, 'success');
+            // Update status message in the modal
+            const statusDiv = document.getElementById('configStatus');
+            statusDiv.innerHTML = `<div class="status-success"><i class="fas fa-check-circle"></i> ${data.message}</div>`;
+        } else {
+            showToast(data.error || 'Connection test failed', 'error');
+            // Update status message in the modal
+            const statusDiv = document.getElementById('configStatus');
+            statusDiv.innerHTML = `<div class="status-error"><i class="fas fa-exclamation-circle"></i> ${data.error || 'Connection test failed'}</div>`;
+        }
+    })
+    .catch(error => {
+        console.error('Error testing connection:', error);
+        showToast('Error testing connection', 'error');
+        // Update status message in the modal
+        const statusDiv = document.getElementById('configStatus');
+        statusDiv.innerHTML = `<div class="status-error"><i class="fas fa-exclamation-circle"></i> Error testing connection</div>`;
+    })
+    .finally(() => {
+        // Restore button state
+        testBtn.innerHTML = originalText;
+        testBtn.disabled = false;
+    });
+}
+
 function showMainContent() {
     console.log('showMainContent called');
     document.getElementById('mainContent').style.display = 'block';
@@ -193,6 +569,7 @@ function openSettingsModal() {
     showSettingsModal();
 }
 
+
 function openTestModal() {
     document.getElementById('testModal').style.display = 'block';
 }
@@ -202,26 +579,43 @@ function openApplyModal() {
 }
 
 function closeAllModals() {
-    document.querySelectorAll('.modal').forEach(modal => {
+    console.log('closeAllModals called');
+    const modals = document.querySelectorAll('.modal');
+    console.log('Found modals to close:', modals.length);
+    
+    modals.forEach(modal => {
+        console.log('Closing modal:', modal.id, 'Current display:', modal.style.display);
         modal.style.display = 'none';
+        console.log('Modal closed:', modal.id);
     });
+    
     // Ensure main content is visible when closing modals (unless we're in initial setup)
     const hostname = document.getElementById('hostname').value;
     const apiKey = document.getElementById('apiKey').value;
+    console.log('Config check - hostname:', hostname, 'apiKey length:', apiKey ? apiKey.length : 0);
+    
     if (hostname && apiKey && apiKey !== '') {
+        console.log('Showing main content');
         showMainContent();
+    } else {
+        console.log('Not showing main content - no valid config');
     }
 }
 
 function startTestMode() {
+    console.log('startTestMode called');
     const date = document.getElementById('testDate').value;
+    console.log('Selected date:', date);
+    
     if (!date) {
         showToast('Please select a date', 'error');
         return;
     }
     
-    closeTestModal();
+    closeAllModals();
+    hideHostSelectionControls();
     showLoadingOverlay();
+    console.log('Starting test mode request...');
     
     fetch('/api/test', {
         method: 'POST',
@@ -230,9 +624,14 @@ function startTestMode() {
         },
         body: JSON.stringify({ date: date })
     })
-    .then(response => response.json())
+    .then(response => {
+        console.log('Response received:', response.status, response.statusText);
+        return response.json();
+    })
     .then(data => {
+        console.log('Response data:', data);
         currentJobId = data.jobId;
+        console.log('Current job ID set to:', currentJobId);
         showProgressSection();
         hideLoadingOverlay();
         showToast('Analysis started', 'success');
@@ -252,6 +651,7 @@ function startApplyMode() {
     }
     
     closeAllModals();
+    hideHostSelectionControls();
     showLoadingOverlay();
     
     fetch('/api/apply', {
@@ -300,18 +700,309 @@ function clearResults() {
     showToast('Results cleared', 'success');
 }
 
+function exportPDFReport() {
+    if (!currentJobId) {
+        showToast('No report to export', 'error');
+        return;
+    }
+    
+    const url = `/api/export/pdf/${currentJobId}`;
+    window.open(url, '_blank');
+    showToast('PDF report exported', 'success');
+}
+
+function undoChanges() {
+    if (!currentJobId) {
+        showToast('No changes to undo', 'error');
+        return;
+    }
+    
+    // This would typically make an API call to undo the retirement changes
+    showToast('Undo functionality not yet implemented', 'info');
+}
+
+// Collection Host Management Functions
+function showCollectionHostModal() {
+    if (collectionHostAnalysis.length === 0) {
+        showToast('No collection hosts to display', 'info');
+        return;
+    }
+    
+    populateCollectionHostList();
+    document.getElementById('collectionHostModal').style.display = 'block';
+}
+
+function populateCollectionHostList() {
+    const list = document.getElementById('collectionHostList');
+    list.innerHTML = '';
+    
+    collectionHostAnalysis.forEach(host => {
+        const hostItem = document.createElement('div');
+        hostItem.className = 'host-item';
+        hostItem.setAttribute('data-collection-host-id', host.systemMonitorId);
+        
+        const isRecommended = host.recommended;
+        const isSelected = selectedCollectionHosts.includes(host.systemMonitorId);
+        
+        hostItem.innerHTML = `
+            <div class="host-info">
+                <label class="checkbox-label">
+                    <input type="checkbox" ${isSelected ? 'checked' : ''} 
+                           onchange="updateCollectionHostSelection('${host.systemMonitorId}', this.checked)">
+                    <span class="checkmark"></span>
+                </label>
+                <div class="host-details">
+                    <div class="host-name">${host.systemMonitorName}</div>
+                    <div class="host-meta">
+                        <span class="ping-status ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
+                        <span class="log-source-count">${host.logSourceCount} log sources</span>
+                        ${isRecommended ? '<span class="recommended-badge">Recommended</span>' : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        if (isSelected) {
+            hostItem.classList.add('selected');
+        }
+        
+        list.appendChild(hostItem);
+    });
+    
+    updateCollectionHostSummary();
+}
+
+function updateCollectionHostSelection(collectionHostId, selected) {
+    if (selected) {
+        if (!selectedCollectionHosts.includes(collectionHostId)) {
+            selectedCollectionHosts.push(collectionHostId);
+        }
+    } else {
+        selectedCollectionHosts = selectedCollectionHosts.filter(id => id !== collectionHostId);
+    }
+    
+    // Update visual state
+    const hostItem = document.querySelector(`[data-collection-host-id="${collectionHostId}"]`);
+    if (hostItem) {
+        hostItem.classList.toggle('selected', selected);
+    }
+    
+    // Update execute button
+    document.getElementById('executeCollectionHostRetirementBtn').disabled = selectedCollectionHosts.length === 0;
+    updateCollectionHostSummary();
+}
+
+function updateCollectionHostSummary() {
+    const summary = document.getElementById('collectionHostSummary');
+    const totalHosts = collectionHostAnalysis.length;
+    const recommendedHosts = collectionHostAnalysis.filter(h => h.recommended).length;
+    const totalLogSources = selectedCollectionHosts.reduce((total, hostId) => {
+        const host = collectionHostAnalysis.find(h => h.systemMonitorId === hostId);
+        return total + (host ? host.logSourceCount : 0);
+    }, 0);
+    
+    summary.innerHTML = `
+        <strong>Summary:</strong> ${totalHosts} total collection hosts | 
+        ${recommendedHosts} recommended | 
+        ${selectedCollectionHosts.length} selected | 
+        ${totalLogSources} log sources will be retired
+    `;
+}
+
+function handleSelectAllRecommendedCollectionHosts() {
+    const selectAll = document.getElementById('selectAllCollectionHosts').checked;
+    const recommendedHosts = collectionHostAnalysis.filter(h => h.recommended);
+    
+    recommendedHosts.forEach(host => {
+        updateCollectionHostSelection(host.systemMonitorId, selectAll);
+    });
+}
+
+function selectAllCollectionHosts() {
+    collectionHostAnalysis.forEach(host => {
+        updateCollectionHostSelection(host.systemMonitorId, true);
+    });
+}
+
+function deselectAllCollectionHosts() {
+    selectedCollectionHosts = [];
+    collectionHostAnalysis.forEach(host => {
+        updateCollectionHostSelection(host.systemMonitorId, false);
+    });
+}
+
+function executeCollectionHostRetirement() {
+    if (selectedCollectionHosts.length === 0) {
+        showToast('Please select at least one collection host', 'warning');
+        return;
+    }
+    
+    // Confirm action
+    const totalLogSources = selectedCollectionHosts.reduce((total, hostId) => {
+        const host = collectionHostAnalysis.find(h => h.systemMonitorId === hostId);
+        return total + (host ? host.logSourceCount : 0);
+    }, 0);
+    
+    if (!confirm(`Are you sure you want to retire ${selectedCollectionHosts.length} collection hosts with ${totalLogSources} log sources? This action cannot be undone.`)) {
+        return;
+    }
+    
+    closeAllModals();
+    showLoadingOverlay();
+    
+    fetch('/api/collection-hosts/retire', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            selectedCollectionHosts: selectedCollectionHosts
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        hideLoadingOverlay();
+        showToast(data.message || 'Collection host retirement initiated', 'success');
+    })
+    .catch(error => {
+        hideLoadingOverlay();
+        console.error('Error retiring collection hosts:', error);
+        showToast('Error retiring collection hosts', 'error');
+    });
+}
+
+// Apply Mode Host Management Functions
+function toggleApplyHostDetails(hostId) {
+    const detailsRow = document.getElementById(hostId);
+    const icon = document.getElementById(`apply-icon-${hostId}`);
+    
+    if (detailsRow.style.display === 'none') {
+        detailsRow.style.display = 'block';
+        icon.textContent = '▼';
+    } else {
+        detailsRow.style.display = 'none';
+        icon.textContent = '▶';
+    }
+}
+
+function populateHostFilterDropdowns(uniqueLogSourceTypes, uniqueLogSourceNames) {
+    // Populate log source type filter
+    const logSourceTypeFilter = document.getElementById('hostLogSourceTypeFilter');
+    if (logSourceTypeFilter) {
+        // Clear existing options except the first one
+        logSourceTypeFilter.innerHTML = '<option value="">All Log Source Types</option>';
+        Array.from(uniqueLogSourceTypes).sort().forEach(type => {
+            const option = document.createElement('option');
+            option.value = type;
+            option.textContent = type;
+            logSourceTypeFilter.appendChild(option);
+        });
+    }
+    
+    // Populate log source name filter
+    const logSourceNameFilter = document.getElementById('hostLogSourceNameFilter');
+    if (logSourceNameFilter) {
+        // Clear existing options except the first one
+        logSourceNameFilter.innerHTML = '<option value="">All Log Source Names</option>';
+        Array.from(uniqueLogSourceNames).sort().forEach(name => {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = name;
+            logSourceNameFilter.appendChild(option);
+        });
+    }
+}
+
+function filterHostResults() {
+    const searchTerm = document.getElementById('hostSearchInput').value.toLowerCase();
+    const pingFilter = document.getElementById('hostPingFilter').value;
+    const logSourceTypeFilter = document.getElementById('hostLogSourceTypeFilter').value;
+    const logSourceNameFilter = document.getElementById('hostLogSourceNameFilter').value;
+    
+    const hostItems = document.querySelectorAll('#hostList .host-item');
+    
+    hostItems.forEach(item => {
+        // Handle host summary rows (expandable rows)
+        if (item.classList.contains('host-summary-row')) {
+            const hostName = item.querySelector('.host-name')?.textContent.toLowerCase() || '';
+            const pingStatus = item.querySelector('.ping-status')?.textContent || '';
+            const logSourceCount = item.querySelector('.log-source-count')?.textContent.toLowerCase() || '';
+            
+            // Get the host data for this row
+            const hostId = item.getAttribute('data-host-id');
+            const host = hostAnalysis.find(h => h.hostId === hostId);
+            
+            const matchesSearch = hostName.includes(searchTerm) || logSourceCount.includes(searchTerm);
+            const matchesPing = !pingFilter || pingStatus === pingFilter;
+            
+            // Check if any log source in this host matches the type/name filters
+            let matchesLogSourceType = !logSourceTypeFilter;
+            let matchesLogSourceName = !logSourceNameFilter;
+            
+            if (host && host.logSources) {
+                if (logSourceTypeFilter) {
+                    matchesLogSourceType = host.logSources.some(source => source.logSourceType === logSourceTypeFilter);
+                }
+                if (logSourceNameFilter) {
+                    matchesLogSourceName = host.logSources.some(source => source.name === logSourceNameFilter);
+                }
+            }
+            
+            const shouldShow = matchesSearch && matchesPing && matchesLogSourceType && matchesLogSourceName;
+            item.style.display = shouldShow ? '' : 'none';
+            
+            // Also hide/show the corresponding details row
+            const detailsRow = item.nextElementSibling;
+            if (detailsRow && detailsRow.classList.contains('host-details-row')) {
+                detailsRow.style.display = shouldShow ? 'none' : 'none'; // Always hide details when filtering
+            }
+        }
+        // Handle host details rows (expandable content)
+        else if (item.classList.contains('host-details-row')) {
+            // Details rows are controlled by their parent summary row
+            // They should be hidden when filtering is active
+            item.style.display = 'none';
+        }
+    });
+}
+
+function clearHostFilters() {
+    document.getElementById('hostSearchInput').value = '';
+    document.getElementById('hostPingFilter').value = '';
+    document.getElementById('hostLogSourceTypeFilter').value = '';
+    document.getElementById('hostLogSourceNameFilter').value = '';
+    filterHostResults();
+}
+
+function toggleHostDetails(hostId) {
+    const detailsRow = document.getElementById(hostId);
+    const icon = document.getElementById(`icon-${hostId}`);
+    
+    if (detailsRow.style.display === 'none') {
+        detailsRow.style.display = 'table-row';
+        icon.textContent = '▼';
+    } else {
+        detailsRow.style.display = 'none';
+        icon.textContent = '▶';
+    }
+}
+
 function connectWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const wsUrl = `${protocol}//${window.location.host}/api/ws`;
+    console.log('Connecting to WebSocket:', wsUrl);
     
     websocket = new WebSocket(wsUrl);
     
     websocket.onopen = function() {
-        console.log('WebSocket connected');
+        console.log('WebSocket connected successfully');
+        console.log('WebSocket ready state:', websocket.readyState);
     };
     
     websocket.onmessage = function(event) {
+        console.log('WebSocket message received:', event.data);
         const job = JSON.parse(event.data);
+        console.log('Parsed job data:', job);
         updateJobProgress(job);
     };
     
@@ -323,11 +1014,21 @@ function connectWebSocket() {
     
     websocket.onerror = function(error) {
         console.error('WebSocket error:', error);
+        console.error('WebSocket error details:', {
+            type: error.type,
+            target: error.target,
+            readyState: websocket.readyState,
+            url: websocket.url
+        });
     };
 }
 
 function updateJobProgress(job) {
+    console.log('updateJobProgress called with job:', job);
+    console.log('Current job ID:', currentJobId);
+    console.log('Job ID from message:', job.id);
     if (job.id === currentJobId) {
+        console.log('Job ID matches current job ID:', currentJobId);
         // Update progress bar
         const progressFill = document.getElementById('progressFill');
         const progressText = document.getElementById('progressText');
@@ -337,15 +1038,34 @@ function updateJobProgress(job) {
         progressText.textContent = job.message;
         
         if (job.results) {
+            console.log('Job has results:', job.results.length, 'items');
             allResults = job.results;
             updateResultsTable();
             updateResultsSummary();
+        } else {
+            console.log('Job has no results property');
         }
         
         if (job.hostAnalysis) {
+            console.log('Job has host analysis:', job.hostAnalysis.length, 'hosts');
+            console.log('Job status:', job.status);
             hostAnalysis = job.hostAnalysis;
             if (job.status === 'completed') {
-                showHostSelectionModal();
+                console.log('Job is completed, showing host selection controls in results');
+                showHostSelectionControls();
+                updateResultsTableForApplyMode();
+            } else {
+                console.log('Job not completed yet, status:', job.status);
+            }
+        }
+        
+        if (job.collectionHostAnalysis) {
+            console.log('Job has collection host analysis:', job.collectionHostAnalysis.length, 'collection hosts');
+            collectionHostAnalysis = job.collectionHostAnalysis;
+            // Show collection host modal if there are recommended collection hosts
+            const recommendedCollectionHosts = collectionHostAnalysis.filter(h => h.recommended);
+            if (recommendedCollectionHosts.length > 0) {
+                showCollectionHostModal();
             }
         }
         
@@ -367,24 +1087,106 @@ function updateJobProgress(job) {
 }
 
 function updateResultsTable() {
+    console.log('updateResultsTable called with', allResults.length, 'results');
     const tbody = document.getElementById('resultsBody');
+    if (!tbody) {
+        console.error('resultsBody element not found!');
+        return;
+    }
     tbody.innerHTML = '';
     
     if (allResults.length === 0) {
+        console.log('No results to display');
         tbody.innerHTML = '<tr><td colspan="5" class="no-results">No results yet. Run Test Mode to analyze log sources.</td></tr>';
         return;
     }
     
+    // Group results by host and collect unique filter values
+    hostGroups = {};
+    const uniqueLogSourceTypes = new Set();
+    const uniqueLogSourceNames = new Set();
+    
     allResults.forEach(result => {
-        const row = document.createElement('tr');
-        row.innerHTML = `
-            <td>${result.id}</td>
-            <td>${result.hostId}</td>
-            <td>${result.hostName}</td>
-            <td>${formatDate(result.maxLogDate)}</td>
-            <td class="ping-${result.pingResult.toLowerCase()}">${result.pingResult}</td>
+        if (!hostGroups[result.hostName]) {
+            hostGroups[result.hostName] = {
+                hostName: result.hostName,
+                pingResult: result.pingResult,
+                hostId: result.hostId,
+                logSources: []
+            };
+        }
+        hostGroups[result.hostName].logSources.push(result);
+        
+        // Collect unique values for filters
+        if (result.logSourceType) {
+            uniqueLogSourceTypes.add(result.logSourceType);
+        }
+        if (result.name) {
+            uniqueLogSourceNames.add(result.name);
+        }
+    });
+    
+    // Populate filter dropdowns
+    populateFilterDropdowns(uniqueLogSourceTypes, uniqueLogSourceNames);
+    
+    // Create expandable rows for each host
+    Object.values(hostGroups).forEach((hostGroup, index) => {
+        const hostId = `host-${index}`;
+        const isExpanded = false;
+        
+        // Create host summary row
+        const summaryRow = document.createElement('tr');
+        summaryRow.className = 'host-summary-row';
+        summaryRow.innerHTML = `
+            <td colspan="5" class="host-summary-cell">
+                <div class="host-summary-content" onclick="toggleHostDetails('${hostId}')">
+                    <span class="expand-icon" id="icon-${hostId}">▶</span>
+                    <span class="host-name">${hostGroup.hostName}</span>
+                    <span class="ping-status ping-${(hostGroup.pingResult || 'unknown').toLowerCase()}">${hostGroup.pingResult || 'Unknown'}</span>
+                    <span class="log-source-count">${hostGroup.logSources.length} log source${hostGroup.logSources.length !== 1 ? 's' : ''}</span>
+                </div>
+            </td>
         `;
-        tbody.appendChild(row);
+        tbody.appendChild(summaryRow);
+        
+        // Create expandable details container
+        const detailsRow = document.createElement('tr');
+        detailsRow.id = hostId;
+        detailsRow.className = 'host-details-row';
+        detailsRow.style.display = 'none';
+        
+        const detailsCell = document.createElement('td');
+        detailsCell.colSpan = 5;
+        detailsCell.className = 'host-details-cell';
+        
+        const detailsTable = document.createElement('table');
+        detailsTable.className = 'log-sources-table';
+        detailsTable.innerHTML = `
+            <thead>
+                <tr>
+                    <th>Log Source ID</th>
+                    <th>Log Source Name</th>
+                    <th>Log Source Type</th>
+                    <th>Last Log Message</th>
+                    <th>Ping Result</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${hostGroup.logSources.map(source => `
+                    <tr>
+                        <td class="log-source-id">${source.id}</td>
+                        <td class="log-source-name">${source.name || 'N/A'}</td>
+                        <td class="log-source-type">${source.logSourceType?.name || source.logSourceType || 'N/A'}</td>
+                        <td class="last-log-date">${formatDate(source.maxLogDate)}</td>
+                        <td class="ping-result ping-${(hostGroup.pingResult || 'unknown').toLowerCase()}">${hostGroup.pingResult || 'Unknown'}</td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        `;
+        
+        detailsCell.appendChild(detailsTable);
+        detailsRow.appendChild(detailsCell);
+        tbody.appendChild(detailsRow);
     });
 }
 
@@ -410,21 +1212,104 @@ function updateResultsSummary() {
 function filterResults() {
     const searchTerm = document.getElementById('searchInput').value.toLowerCase();
     const pingFilter = document.getElementById('pingFilter').value;
+    const logSourceTypeFilter = document.getElementById('logSourceTypeFilter').value;
+    const logSourceNameFilter = document.getElementById('logSourceNameFilter').value;
     
     const rows = document.querySelectorAll('#resultsBody tr');
     
     rows.forEach(row => {
-        const cells = row.querySelectorAll('td');
-        if (cells.length === 0) return; // Skip "no results" row
+        // Skip "no results" row
+        if (row.querySelector('.no-results')) {
+            return;
+        }
         
-        const text = Array.from(cells).map(cell => cell.textContent.toLowerCase()).join(' ');
-        const pingResult = cells[4].textContent;
-        
-        const matchesSearch = text.includes(searchTerm);
-        const matchesPing = !pingFilter || pingResult === pingFilter;
-        
-        row.style.display = (matchesSearch && matchesPing) ? '' : 'none';
+        // Handle host summary rows (expandable rows)
+        if (row.classList.contains('host-summary-row')) {
+            const hostName = row.querySelector('.host-name')?.textContent.toLowerCase() || '';
+            const pingStatus = row.querySelector('.ping-status')?.textContent || '';
+            const logSourceCount = row.querySelector('.log-source-count')?.textContent.toLowerCase() || '';
+            
+            // Get the host group data for this row
+            const hostId = row.querySelector('.host-summary-content')?.onclick?.toString().match(/toggleHostDetails\('(host-\d+)'\)/)?.[1];
+            const hostGroup = getHostGroupByHostId(hostId);
+            
+            const matchesSearch = hostName.includes(searchTerm) || logSourceCount.includes(searchTerm);
+            const matchesPing = !pingFilter || pingStatus === pingFilter;
+            
+            // Check if any log source in this host matches the type/name filters
+            let matchesLogSourceType = !logSourceTypeFilter;
+            let matchesLogSourceName = !logSourceNameFilter;
+            
+            if (hostGroup && hostGroup.logSources) {
+                if (logSourceTypeFilter) {
+                    matchesLogSourceType = hostGroup.logSources.some(source => source.logSourceType === logSourceTypeFilter);
+                }
+                if (logSourceNameFilter) {
+                    matchesLogSourceName = hostGroup.logSources.some(source => source.name === logSourceNameFilter);
+                }
+            }
+            
+            const shouldShow = matchesSearch && matchesPing && matchesLogSourceType && matchesLogSourceName;
+            row.style.display = shouldShow ? '' : 'none';
+            
+            // Also hide/show the corresponding details row
+            const detailsRow = row.nextElementSibling;
+            if (detailsRow && detailsRow.classList.contains('host-details-row')) {
+                detailsRow.style.display = shouldShow ? 'none' : 'none'; // Always hide details when filtering
+            }
+        }
+        // Handle host details rows (expandable content)
+        else if (row.classList.contains('host-details-row')) {
+            // Details rows are controlled by their parent summary row
+            // They should be hidden when filtering is active
+            row.style.display = 'none';
+        }
     });
+}
+
+function populateFilterDropdowns(uniqueLogSourceTypes, uniqueLogSourceNames) {
+    // Populate log source type filter
+    const logSourceTypeFilter = document.getElementById('logSourceTypeFilter');
+    logSourceTypeFilter.innerHTML = '<option value="">All Log Source Types</option>';
+    
+    Array.from(uniqueLogSourceTypes).sort().forEach(type => {
+        const option = document.createElement('option');
+        option.value = type;
+        option.textContent = type;
+        logSourceTypeFilter.appendChild(option);
+    });
+    
+    // Populate log source name filter
+    const logSourceNameFilter = document.getElementById('logSourceNameFilter');
+    logSourceNameFilter.innerHTML = '<option value="">All Log Source Names</option>';
+    
+    Array.from(uniqueLogSourceNames).sort().forEach(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        logSourceNameFilter.appendChild(option);
+    });
+}
+
+function getHostGroupByHostId(hostId) {
+    if (!hostId) return null;
+    
+    // Find the host group by matching the hostId pattern
+    const hostIndex = parseInt(hostId.replace('host-', ''));
+    const hostNames = Object.keys(hostGroups);
+    if (hostIndex >= 0 && hostIndex < hostNames.length) {
+        const hostName = hostNames[hostIndex];
+        return hostGroups[hostName];
+    }
+    return null;
+}
+
+function clearFilters() {
+    document.getElementById('searchInput').value = '';
+    document.getElementById('pingFilter').value = '';
+    document.getElementById('logSourceTypeFilter').value = '';
+    document.getElementById('logSourceNameFilter').value = '';
+    filterResults();
 }
 
 function showProgressSection() {
@@ -531,91 +1416,237 @@ function executeBackup() {
     });
 }
 
-function startApplyMode() {
-    const date = document.getElementById('applyDate').value;
-    if (!date) {
-        showToast('Please select a date', 'error');
+// Host Selection Functions
+function showHostSelectionControls() {
+    // Show the host selection controls in the results section
+    document.getElementById('hostSelectionControls').style.display = 'block';
+    updateHostSummary();
+}
+
+function hideHostSelectionControls() {
+    // Hide the host selection controls in the results section
+    document.getElementById('hostSelectionControls').style.display = 'none';
+    selectedHosts = []; // Clear selected hosts
+}
+
+function cancelRetirement() {
+    // Cancel retirement and hide host selection controls
+    hideHostSelectionControls();
+    showToast('Retirement cancelled', 'info');
+}
+
+function updateResultsTableForApplyMode() {
+    // Update the results table to show hosts with checkboxes for selection
+    console.log('updateResultsTableForApplyMode called with', hostAnalysis.length, 'hosts');
+    const tbody = document.getElementById('resultsBody');
+    if (!tbody) {
+        console.error('resultsBody element not found!');
+        return;
+    }
+    tbody.innerHTML = '';
+    
+    if (hostAnalysis.length === 0) {
+        console.log('No hosts to display');
+        tbody.innerHTML = '<tr><td colspan="6" class="no-results">No hosts found for retirement.</td></tr>';
         return;
     }
     
-    closeAllModals();
-    showLoadingOverlay();
+    // Group hosts and collect unique filter values
+    const uniqueLogSourceTypes = new Set();
+    const uniqueLogSourceNames = new Set();
     
-    fetch('/api/apply', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ date: date })
-    })
-    .then(response => response.json())
-    .then(data => {
-        currentJobId = data.jobId;
-        showProgressSection();
-        hideLoadingOverlay();
-        showToast('Host analysis started', 'success');
-    })
-    .catch(error => {
-        console.error('Error starting apply mode:', error);
-        hideLoadingOverlay();
-        showToast('Error starting host analysis', 'error');
+    hostAnalysis.forEach(host => {
+        // Collect unique values for filters
+        host.logSources.forEach(logSource => {
+            if (logSource.logSourceType) {
+                uniqueLogSourceTypes.add(logSource.logSourceType);
+            }
+            if (logSource.name) {
+                uniqueLogSourceNames.add(logSource.name);
+            }
+        });
     });
-}
-
-// Host Selection Functions
-function showHostSelectionModal() {
-    populateHostList();
-    updateHostSummary();
-    document.getElementById('hostSelectionModal').style.display = 'block';
+    
+    // Populate filter dropdowns
+    populateFilterDropdowns(uniqueLogSourceTypes, uniqueLogSourceNames);
+    
+    // Create expandable rows for each host
+    hostAnalysis.forEach((host, index) => {
+        const hostId = `apply-host-${index}`;
+        const isRecommended = host.recommended;
+        const isSelected = selectedHosts.includes(host.hostId);
+        
+        // Create host summary row
+        const summaryRow = document.createElement('tr');
+        summaryRow.className = 'host-summary-row';
+        summaryRow.setAttribute('data-host-id', host.hostId);
+        summaryRow.innerHTML = `
+            <td class="host-checkbox-cell">
+                <label class="checkbox-label">
+                    <input type="checkbox" ${isSelected ? 'checked' : ''} 
+                           onchange="updateHostSelection('${host.hostId}', this.checked)">
+                    <span class="checkmark"></span>
+                </label>
+            </td>
+            <td colspan="4" class="host-summary-cell">
+                <div class="host-summary-content" onclick="toggleHostDetails('${hostId}')">
+                    <span class="expand-icon" id="icon-${hostId}">▶</span>
+                    <span class="host-name">${host.hostName}</span>
+                    <span class="ping-status ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
+                    <span class="log-source-count">${host.logSourceCount} log source${host.logSourceCount !== 1 ? 's' : ''}</span>
+                    <span class="max-log-date">Last log: ${formatDate(host.maxLogDate)}</span>
+                    ${isRecommended ? '<span class="recommended-badge">Recommended</span>' : ''}
+                </div>
+            </td>
+        `;
+        tbody.appendChild(summaryRow);
+        
+        // Create expandable details container
+        const detailsRow = document.createElement('tr');
+        detailsRow.id = hostId;
+        detailsRow.className = 'host-details-row';
+        detailsRow.style.display = 'none';
+        
+        const detailsCell = document.createElement('td');
+        detailsCell.colSpan = 6;
+        detailsCell.className = 'host-details-cell';
+        
+        const detailsTable = document.createElement('table');
+        detailsTable.className = 'log-sources-table';
+        detailsTable.innerHTML = `
+            <thead>
+                <tr>
+                    <th>Log Source ID</th>
+                    <th>Log Source Name</th>
+                    <th>Log Source Type</th>
+                    <th>Last Log Message</th>
+                    <th>Ping Result</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${host.logSources.map(source => `
+                    <tr>
+                        <td class="log-source-id">${source.id}</td>
+                        <td class="log-source-name">${source.name || 'N/A'}</td>
+                        <td class="log-source-type">${source.logSourceType?.name || source.logSourceType || 'N/A'}</td>
+                        <td class="last-log-date">${formatDate(source.maxLogDate)}</td>
+                        <td class="ping-result ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        `;
+        
+        detailsCell.appendChild(detailsTable);
+        detailsRow.appendChild(detailsCell);
+        tbody.appendChild(detailsRow);
+    });
 }
 
 function populateHostList() {
     const hostList = document.getElementById('hostList');
     hostList.innerHTML = '';
     
+    // Group hosts and collect unique filter values
+    const uniqueLogSourceTypes = new Set();
+    const uniqueLogSourceNames = new Set();
+    
     hostAnalysis.forEach(host => {
-        const hostItem = document.createElement('div');
-        hostItem.className = 'host-item';
-        hostItem.dataset.hostId = host.hostId;
+        // Collect unique values for filters
+        host.logSources.forEach(logSource => {
+            if (logSource.logSourceType) {
+                uniqueLogSourceTypes.add(logSource.logSourceType);
+            }
+            if (logSource.name) {
+                uniqueLogSourceNames.add(logSource.name);
+            }
+        });
+    });
+    
+    // Populate filter dropdowns
+    populateHostFilterDropdowns(uniqueLogSourceTypes, uniqueLogSourceNames);
+    
+    // Create expandable rows for each host
+    hostAnalysis.forEach((host, index) => {
+        const hostId = `apply-host-${index}`;
+        const isRecommended = host.recommended;
+        const isSelected = selectedHosts.includes(host.hostId);
         
-        hostItem.innerHTML = `
-            <input type="checkbox" class="host-checkbox" data-host-id="${host.hostId}">
+        // Create host summary row
+        const summaryRow = document.createElement('div');
+        summaryRow.className = 'host-item host-summary-row';
+        summaryRow.setAttribute('data-host-id', host.hostId);
+        summaryRow.innerHTML = `
             <div class="host-info">
-                <div class="host-name">
-                    ${host.hostName}
-                    <span class="host-recommended ${host.recommended ? 'recommended' : 'not-recommended'}">
-                        ${host.recommended ? 'Recommended' : 'Not Recommended'}
-                    </span>
+                <label class="checkbox-label">
+                    <input type="checkbox" ${isSelected ? 'checked' : ''} 
+                           onchange="updateHostSelection('${host.hostId}', this.checked)">
+                    <span class="checkmark"></span>
+                </label>
+                <div class="host-details" onclick="toggleApplyHostDetails('${hostId}')">
+                    <div class="host-summary-content">
+                        <span class="expand-icon" id="apply-icon-${hostId}">▶</span>
+                        <span class="host-name">${host.hostName}</span>
+                        <span class="ping-status ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
+                        <span class="log-source-count">${host.logSourceCount} log source${host.logSourceCount !== 1 ? 's' : ''}</span>
+                        <span class="max-log-date">Last log: ${formatDate(host.maxLogDate)}</span>
+                        ${isRecommended ? '<span class="recommended-badge">Recommended</span>' : ''}
                 </div>
-                <div class="host-details">
-                    <div class="host-detail">
-                        <i class="fas fa-server"></i>
-                        <span>${host.logSourceCount} log sources</span>
-                    </div>
-                    <div class="host-detail">
-                        <i class="fas fa-clock"></i>
-                        <span>Last log: ${formatDate(host.maxLogDate)}</span>
-                    </div>
-                    <div class="host-detail">
-                        <i class="fas fa-wifi"></i>
-                        <span class="ping-${host.pingResult.toLowerCase()}">${host.pingResult}</span>
-                    </div>
                 </div>
             </div>
         `;
         
-        // Add click handler for the checkbox
-        const checkbox = hostItem.querySelector('.host-checkbox');
-        checkbox.addEventListener('change', function() {
-            updateHostSelection(host.hostId, this.checked);
-            updateHostSummary();
-        });
+        if (isSelected) {
+            summaryRow.classList.add('selected');
+        }
         
-        hostList.appendChild(hostItem);
+        hostList.appendChild(summaryRow);
+        
+        // Create expandable details container
+        const detailsRow = document.createElement('div');
+        detailsRow.id = hostId;
+        detailsRow.className = 'host-details-row';
+        detailsRow.style.display = 'none';
+        
+        const detailsContent = document.createElement('div');
+        detailsContent.className = 'host-details-content';
+        
+        const detailsTable = document.createElement('table');
+        detailsTable.className = 'log-sources-table';
+        detailsTable.innerHTML = `
+            <thead>
+                <tr>
+                    <th>Log Source ID</th>
+                    <th>Log Source Name</th>
+                    <th>Log Source Type</th>
+                    <th>Last Log Message</th>
+                    <th>Ping Result</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${host.logSources.map(source => `
+                    <tr>
+                        <td class="log-source-id">${source.id}</td>
+                        <td class="log-source-name">${source.name || 'N/A'}</td>
+                        <td class="log-source-type">${source.logSourceType?.name || source.logSourceType || 'N/A'}</td>
+                        <td class="last-log-date">${formatDate(source.maxLogDate)}</td>
+                        <td class="ping-result ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        `;
+        
+        detailsContent.appendChild(detailsTable);
+        detailsRow.appendChild(detailsContent);
+        hostList.appendChild(detailsRow);
     });
+    
+    updateHostSummary();
 }
 
 function updateHostSelection(hostId, selected) {
+    console.log('updateHostSelection called with:', hostId, selected);
+    console.log('Current selectedHosts:', selectedHosts);
+    
     if (selected) {
         if (!selectedHosts.includes(hostId)) {
             selectedHosts.push(hostId);
@@ -624,14 +1655,25 @@ function updateHostSelection(hostId, selected) {
         selectedHosts = selectedHosts.filter(id => id !== hostId);
     }
     
+    console.log('Updated selectedHosts:', selectedHosts);
+    
     // Update visual state
     const hostItem = document.querySelector(`[data-host-id="${hostId}"]`);
     if (hostItem) {
         hostItem.classList.toggle('selected', selected);
     }
     
-    // Update execute button
-    document.getElementById('executeRetirementBtn').disabled = selectedHosts.length === 0;
+    // Update execute button - always enabled
+    const executeBtn = document.getElementById('executeRetirementBtn');
+    if (executeBtn) {
+        executeBtn.disabled = false; // Always enabled
+        console.log('Execute button always enabled, selected hosts count:', selectedHosts.length);
+    } else {
+        console.error('Execute button element not found!');
+    }
+    
+    // Update host summary
+    updateHostSummary();
 }
 
 function updateHostSummary() {
@@ -639,7 +1681,7 @@ function updateHostSummary() {
     const totalHosts = hostAnalysis.length;
     const recommendedHosts = hostAnalysis.filter(h => h.recommended).length;
     const totalLogSources = selectedHosts.reduce((total, hostId) => {
-        const host = hostAnalysis.find(h => h.hostId === hostId);
+        const host = hostAnalysis.find(h => String(h.hostId) === String(hostId));
         return total + (host ? host.logSourceCount : 0);
     }, 0);
     
@@ -690,13 +1732,13 @@ function deselectAllHosts() {
 
 function executeRetirement() {
     if (selectedHosts.length === 0) {
-        showToast('Please select at least one host', 'warning');
+        showToast('Please select at least one host to retire', 'warning');
         return;
     }
     
     // Confirm action
     const totalLogSources = selectedHosts.reduce((total, hostId) => {
-        const host = hostAnalysis.find(h => h.hostId === hostId);
+        const host = hostAnalysis.find(h => String(h.hostId) === String(hostId));
         return total + (host ? host.logSourceCount : 0);
     }, 0);
     

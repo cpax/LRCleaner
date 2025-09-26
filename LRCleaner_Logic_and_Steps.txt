@@ -1,0 +1,567 @@
+LRCleaner - Logic and Steps Documentation
+==========================================
+
+OVERVIEW
+--------
+LRCleaner is a LogRhythm log source management tool that helps identify and retire inactive log sources. It operates in Analysis Mode for identifying retirement candidates and executing the retirement process.
+
+CORE FUNCTIONALITY
+------------------
+1. Connect to LogRhythm API using hostname, API key, and port
+2. Fetch all log sources from LogRhythm
+3. Filter log sources based on date and exclusion criteria
+4. Test host connectivity using ping
+5. Group and analyze hosts for retirement recommendations
+6. Execute retirement process
+7. Provide real-time progress updates via WebSocket
+
+MAIN OPERATIONAL FLOWS
+======================
+
+1. APPLICATION STARTUP
+---------------------
+- Find available port (default 8080, fallback to 8000-8443)
+- Load configuration from config.json
+- Setup HTTP client with TLS skip verification
+- Initialize WebSocket upgrader
+- Start HTTP server with routes
+- Open browser automatically
+- Wait for interrupt signal for graceful shutdown
+
+2. CONFIGURATION MANAGEMENT
+--------------------------
+- Load default config (hostname: localhost, port: 8501)
+- Try to load from config.json file
+    - If config.json doesn't exist Provide web interface for configuration
+- Test connection to LogRhythm API
+- Save configuration to file
+- Allow for selection of dark mode for web UI
+
+3. ANALYSIS MODE (Log Source Management)
+----------------------------------------
+Purpose: Analyze and retire log sources and hosts
+
+Phase 1: Log Source Analysis
+1. User selects cutoff date for log analysis
+    a. Default should be today - 90 days
+2. Create background job with unique ID
+3. Fetch all log sources from LogRhythm API
+4. Filter log sources:
+   - Exclude sources with logs after cutoff date
+   - Exclude already retired sources
+   - Exclude LogRhythm system sources (Open Collector, Echo, AI Engine, etc.)
+   - Exclude sources matching configured exclusion patterns
+5. Group log sources by host
+6. Collect unique hostnames for ping testing
+7. Perform concurrent ping tests (max 50 concurrent)
+8. Analyze each host:
+   - Count log sources per host
+   - Determine max log date per host
+   - Recommend retirement if:
+     * Ping fails OR
+     * No logs after selected date
+9. Present host selection interface
+10. User selects hosts for retirement
+    a. User should be able to select individual log sources to be retired.  If a host has
+        both active and inactive log sources we will recommend retirement of just the inactive
+        log sources and not the agent or host.  In this case the user should be able to view the active
+        log sources but they should be greyed out and no check box is available
+
+Phase 2: Retirement Execution
+1. User confirms selection (hosts and/or individual log sources)
+2. Create rollback data:
+   - Store original log source names and statuses
+   - Store original host names and statuses
+   - Store original system monitor statuses
+   - Create rollback file: LRCleaner_rollback_{timestamp}.json
+3. Create retirement job
+4. Process selected items:
+   a. For selected hosts with all log sources inactive:
+      - Retire all log sources for that host
+      - Update log source name (add "Retired by LRCleaner")
+      - Set record status to "Retired"
+      - Remove host identifiers (IP addresses)
+      - Update host record status to "Retired"
+      - Provide a list of agents that should be manually retired.  
+   b. For selected individual log sources:
+      - Retire only the selected log sources
+      - Update log source name (add "Retired by LRCleaner")
+      - Set record status to "Retired"
+      - Leave host and system monitor active (other log sources remain active)
+5. After retirement, re-evaluate hosts:
+   - Check if any hosts now have zero active log sources
+   - If so, retire those hosts (remove identifiers, update status)
+6. Generate retirement records and summary
+7. Provide rollback option:
+   - Display prominent rollback button in web UI
+   - Show rollback history with timestamps
+   - Allow user to select which rollback point to restore
+   - Restore original state from selected rollback file
+   - Confirm rollback operation before execution
+
+4. DATABASE BACKUP (Optional)
+----------------------------
+Purpose: Create backup before making changes
+
+Steps:
+Guidance for performing a database backup.  When a customer Clicks Analyze they will be shown this info.
+They have to click a button to acknowledge this.  They can check a checkbox to not see this again.
+
+1. Log in to the system that is your Platform Manager.
+2. Open SQL Server Management Studio and log in with an account that has administrative privileges (e.g., `sa`).
+3. Expand the "Databases" node and select `LogRhythmEMDB`.
+4. Right-click `LogRhythmEMDB`, select **Tasks**, then click **Back Up...**.
+5. The "Back Up Database - LogRhythmEMDB" window appears.
+6. In the **Source** section, set the backup type to **Full**.
+7. In the **Backup set** section, you may change the file name and description if desired (the system suggests a default based on the database name and backup type).
+8. In the **Destination** section, ensure "Back up to: Disk" is selected. Click **Add** to specify a file or device for the backup.
+9. Click **OK** to start the backup.
+10. When the backup is complete, close SQL Server Management Studio.
+
+5. COLLECTION HOST ANALYSIS
+---------------------------
+Purpose: Identify collection hosts (system monitors) for future retirement
+
+Steps:
+1. Group log sources by system monitor (collection host)
+2. Test connectivity to collection hosts
+3. Identify candidates for retirement if:
+   - Ping fails AND has zero log sources, OR
+   - Has zero log sources (regardless of ping)
+4. Log collection host analysis results (retirement disabled due to API bug)
+
+6. ROLLBACK FUNCTIONALITY
+-------------------------
+Purpose: Allow customers to undo retirement changes if mistakes are made
+
+Rollback Data Creation:
+1. Before any retirement operation, automatically create rollback data
+2. Store original log source names and recordStatus
+3. Store original host names and recordStatusName
+4. Store original host identifiers (IP addresses)
+5. Store original system monitor statuses
+6. Create rollback file: LRCleaner_rollback_{timestamp}.json
+
+Rollback UI Implementation:
+- Rollback button appears in main toolbar after retirement operations
+- Rollback history modal shows:
+  * Timestamp of each rollback point
+  * Number of items that would be restored
+  * Brief description of what was changed
+  * Status of rollback file (exists/valid)
+- Rollback confirmation dialog:
+  * Lists all items that will be restored
+  * Shows original vs current values
+  * Requires explicit confirmation
+  * Shows progress during rollback operation
+- Rollback status indicators:
+  * Green: Rollback available
+  * Yellow: Rollback in progress
+  * Red: Rollback failed
+  * Gray: No rollback available
+
+Rollback Process:
+1. User selects rollback point from history
+2. System displays confirmation dialog with details
+3. User confirms rollback operation
+4. System restores original log source names and recordStatus
+5. System restores original host names and recordStatusName
+6. System restores original host identifiers
+7. System restores original system monitor statuses
+8. System logs all rollback operations
+9. System displays rollback completion status
+
+Rollback Limitations:
+- Only available for operations performed by LRCleaner
+- Cannot rollback changes made outside of LRCleaner
+- Rollback files are kept for 30 days (configurable)
+- Maximum of 10 rollback points per session
+
+DATA STRUCTURES
+===============
+
+LogSource:
+- ID (interface{} - can be string or number)
+- Name
+- RecordStatus
+- MaxLogDate
+- Host (ID, Name)
+- LogSourceType (Name)
+- SystemMonitorID
+- SystemMonitorName
+
+HostAnalysis:
+- HostID
+- HostName
+- LogSourceCount
+- MaxLogDate
+- PingResult
+- Recommended (boolean)
+- LogSources (array)
+
+CollectionHostAnalysis:
+- SystemMonitorID
+- SystemMonitorName
+- LogSourceCount
+- PingResult
+- Recommended (boolean)
+- LogSources (array)
+
+RetirementRecord:
+- LogSourceID
+- HostID
+- HostName
+- OriginalName
+- RetiredName
+- OriginalStatus
+- RetiredStatus
+- Timestamp
+
+JobStatus:
+- ID
+- Status (running, completed, error)
+- Progress (0-100)
+- Message
+- HostAnalysis (for Analysis Mode)
+- CollectionHostAnalysis
+- RetirementRecords
+- Error
+- StartTime
+- EndTime
+
+FILTERING LOGIC
+===============
+
+Excluded Log Sources:
+1. LogRhythm system sources (prefix "LogRhythm")
+2. Echo hosts and log sources (case-insensitive)
+3. Configured exclusion patterns:
+   - "Open Collector"
+   - "Echo"
+   - "AI Engine"
+   - "LogRhythm System"
+
+Date Filtering:
+- Only include sources where MaxLogDate is before selected cutoff date
+- Skip already retired sources (RecordStatus = "Retired")
+
+RETIREMENT LOGIC
+================
+
+Host Retirement Criteria:
+1. Ping fails (host unreachable)
+2. No recent logs most recent log is older that customer provided date
+
+Log Source Retirement:
+1. Update name: append "Retired by LRCleaner"
+2. Set recordStatus to "Retired"
+3. Use PUT request to LogRhythm API
+
+System Monitor Retirement: (DISABLED - API Bug)
+1. First unlicense (set recordStatusName to "Unlicensed")
+2. Then retire (set recordStatusName to "Retired", licenseType to "None")
+
+Host Retirement:
+1. Remove all IP address identifiers
+2. Set recordStatusName to "Retired"
+3. Update name to include "Retired by LRCleaner"
+
+CONCURRENCY AND PERFORMANCE
+===========================
+
+Concurrent Operations:
+- Ping testing: max 50 concurrent connections
+- API calls: uses HTTP client with connection pooling
+- Background jobs: goroutines for non-blocking operations
+
+Performance Optimizations:
+- Batch processing of log sources
+- Connection reuse for HTTP requests
+- Concurrent ping testing with semaphore
+- Real-time progress updates via WebSocket
+
+Error Handling:
+- Graceful degradation on API failures
+- Retry logic for network operations
+- Comprehensive logging
+    - in the config they can specify that this is logged to a text file
+    - setup logging levels from info to debug - logging level can be set when program is run at command line
+- User-friendly error messages
+
+WEB INTERFACE FEATURES
+======================
+
+Real-time Updates:
+- WebSocket connection for live progress
+- Job status broadcasting
+- Progress bar updates
+- Status message updates
+
+User Interface:
+- Configuration modal
+- Analysis mode interface
+- Date picker for cutoff date
+- Host selection with checkboxes
+- Results table with filtering
+- Export functionality
+- Rollback functionality with history
+
+Data Export:
+- CSV export for analysis results
+- Text report for retirement records
+
+
+SECURITY CONSIDERATIONS
+=======================
+
+API Key Storage:
+- Stored in plain text in config.json
+- No encryption (local file only)
+
+SSL/TLS:
+- Skip verification for LogRhythm API (enterprise environments)
+- Local web server (localhost only)
+
+Authentication:
+- No authentication on web interface (local use only)
+- LogRhythm API authentication via Bearer token
+
+CONFIGURATION
+=============
+
+Default Configuration:
+- Hostname: localhost
+- Port: 8501
+- Excluded sources: Open Collector, Echo, AI Engine, LogRhythm System
+
+Configuration File (config.json):
+- JSON format
+- Stored in same directory as executable
+- Persisted across application restarts
+
+Environment Variables:
+- LRCLEANER_HOSTNAME
+- LRCLEANER_API_KEY
+- LRCLEANER_PORT
+
+API ENDPOINTS
+=============
+
+Web Interface:
+- GET / - Serve main HTML page
+- GET /static/* - Serve static assets
+
+Configuration:
+- GET /api/config - Get current configuration
+- POST /api/config - Update configuration
+- POST /api/test-connection - Test LogRhythm connection
+
+Operations:
+- POST /api/analyze - Start analysis mode
+- POST /api/execute - Execute retirement
+- POST /api/rollback - Rollback changes
+- POST /api/backup - Perform database backup
+- POST /api/collection-hosts/retire - Analyze collection hosts (retirement disabled)
+
+Data Access:
+- GET /api/jobs/{jobId} - Get job status
+- GET /api/export/{jobId} - Export results as CSV
+- GET /api/export/pdf/{jobId} - Export report as PDF
+
+Real-time:
+- GET /ws - WebSocket connection for live updates
+
+ERROR HANDLING
+==============
+
+API Errors:
+- Connection failures
+- Authentication errors
+- Rate limiting
+- Invalid responses
+
+Network Errors:
+- Ping failures
+- Timeout handling
+- Retry logic
+
+Application Errors:
+- Configuration validation
+- Job management
+- WebSocket connection issues
+
+Logging:
+- Console output for debugging
+- Error details in job status
+- User-friendly error messages
+
+DEPLOYMENT
+==========
+
+Build Process:
+- Single binary compilation
+- Cross-platform builds (Windows, macOS, Linux)
+- Static assets embedded
+- No external dependencies
+
+Distribution:
+- Executable files
+- ZIP/TAR.GZ packages
+- Build scripts for automation
+
+Port Management:
+- Automatic port detection
+- Command line port specification
+- Fallback port selection
+
+Browser Integration:
+- Automatic browser opening
+- Localhost-only access
+- No external network exposure
+
+DEVELOPMENT MODE
+================
+
+Command Line Options:
+- --dev: Enable development mode
+- --log-level: Set logging level (info, debug, trace)
+- --port: Specify port number
+- --config: Specify config file path
+
+Development Mode Features:
+1. Enhanced Logging:
+   - All operations logged to file (LRCleaner_dev.log)
+   - Detailed API request/response logging
+   - Step-by-step operation tracking
+   - Performance metrics logging
+
+2. Safety Features:
+   - Confirmation prompts for all destructive operations
+   - Dry-run mode (--dry-run) to preview changes
+   - Maximum retirement limits (configurable)
+   - Automatic backup before operations
+
+3. Development UI Features:
+   - Detailed operation logs viewer
+   - Performance metrics dashboard
+   - Development mode indicator in header
+   - Enhanced confirmation dialogs
+   - Debug information display
+   - API call monitoring panel
+
+AUTOMATED TESTING
+=================
+
+Test Categories:
+
+1. UNIT TESTS
+-------------
+- Configuration loading and validation
+- Log source filtering logic
+- Host analysis algorithms
+- Ping testing functionality
+- Data structure serialization/deserialization
+
+2. INTEGRATION TESTS
+-------------------
+- LogRhythm API connectivity
+- Database backup operations
+- WebSocket communication
+- File I/O operations
+- Configuration persistence
+
+3. API TESTS
+-----------
+- All REST endpoints
+- Request/response validation
+- Error handling
+- Authentication
+- Rate limiting
+
+4. END-TO-END TESTS
+------------------
+- Complete analysis workflow
+- Retirement process (with rollback)
+- Export functionality
+- Web interface interactions
+- Cross-browser compatibility
+
+5. PERFORMANCE TESTS
+-------------------
+- Large dataset processing (10,000+ log sources)
+- Concurrent operations
+- Memory usage
+- Network latency handling
+- Database backup performance
+
+Test Environment Setup:
+- Mock LogRhythm API server
+- Test database with sample data
+- Isolated test configuration
+- Automated test data generation
+- CI/CD pipeline integration
+
+Test Data Management:
+- Sample log source datasets
+- Various host configurations
+- Different retirement scenarios
+- Error condition simulations
+- Performance benchmark data
+
+Testing Tools:
+- Go testing framework
+- HTTP test server
+- Database test containers
+- Web UI testing (Selenium/Playwright)
+- Performance profiling tools
+
+TODO - SYSTEM MONITOR AGENT RETIREMENT
+=====================================
+Note: System monitor agent retirement is currently disabled due to a LogRhythm API bug that will be fixed next month.
+
+Features to implement once API bug is resolved:
+
+1. SYSTEM MONITOR AGENT RETIREMENT
+----------------------------------
+Purpose: Retire system monitor agents (collection hosts) that have no active log sources
+
+Steps:
+1. Group log sources by system monitor (collection host)
+2. Test connectivity to collection hosts
+3. Recommend retirement if:
+   - Ping fails AND has zero log sources, OR
+   - Has zero log sources (regardless of ping)
+4. Retire recommended collection hosts:
+   - First unlicense system monitor (set recordStatusName to "Unlicensed")
+   - Then retire system monitor (set recordStatusName to "Retired", licenseType to "None")
+
+2. INTEGRATION WITH HOST RETIREMENT
+----------------------------------
+- After retiring log sources, check if any system monitors now have zero active log sources
+- If so, automatically retire those system monitors
+- This should be integrated into Phase 2: Retirement Execution step 4
+
+3. API ENDPOINTS TO ENABLE
+-------------------------
+- POST /api/collection-hosts/retire - Execute collection host retirement
+- Update existing endpoints to include system monitor retirement in the workflow
+
+4. DATA STRUCTURES TO UPDATE
+---------------------------
+- CollectionHostAnalysis: Add retirement execution fields
+- JobStatus: Include system monitor retirement records
+- RetirementRecord: Add system monitor retirement tracking
+
+5. UI CHANGES NEEDED
+-------------------
+- Add collection host selection interface
+- Display system monitor retirement candidates
+- Show retirement progress for system monitors
+- Include system monitor retirement in summary reports
+
+6. TESTING REQUIREMENTS
+----------------------
+- Test system monitor unlicensing API calls
+- Test system monitor retirement API calls
+- Test integration with host retirement workflow
+- Test error handling for system monitor operations
