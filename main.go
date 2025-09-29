@@ -1,0 +1,2417 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"os/signal"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
+	_ "github.com/microsoft/go-mssqldb"
+)
+
+// Configuration structure
+type Config struct {
+	Hostname           string   `json:"hostname"`
+	APIKey             string   `json:"apiKey"`
+	Port               int      `json:"port"`
+	ExcludedLogSources []string `json:"excludedLogSources"`
+}
+
+// LogRhythm API structures
+type LogSource struct {
+	ID                interface{}   `json:"id"` // Can be string or number
+	Name              string        `json:"name"`
+	RecordStatus      string        `json:"recordStatus"`
+	MaxLogDate        string        `json:"maxLogDate"`
+	Host              Host          `json:"host"`
+	LogSourceType     LogSourceType `json:"logSourceType"`
+	SystemMonitorID   interface{}   `json:"systemMonitorId"`   // Collection host ID
+	SystemMonitorName string        `json:"systemMonitorName"` // Collection host name
+}
+
+type Host struct {
+	ID   interface{} `json:"id"` // Can be string or number
+	Name string      `json:"name"`
+}
+
+type LogSourceType struct {
+	Name string `json:"name"`
+}
+
+type AnalysisResult struct {
+	ID            interface{} `json:"id"`     // Can be string or number
+	HostID        interface{} `json:"hostId"` // Can be string or number
+	HostName      string      `json:"hostName"`
+	Name          string      `json:"name"`          // Log source name
+	LogSourceType string      `json:"logSourceType"` // Log source type name
+	MaxLogDate    string      `json:"maxLogDate"`
+	PingResult    string      `json:"pingResult"`
+}
+
+type HostAnalysis struct {
+	HostID         interface{} `json:"hostId"` // Can be string or number
+	HostName       string      `json:"hostName"`
+	LogSourceCount int         `json:"logSourceCount"`
+	MaxLogDate     string      `json:"maxLogDate"`
+	PingResult     string      `json:"pingResult"`
+	Recommended    bool        `json:"recommended"`
+	LogSources     []LogSource `json:"logSources"`
+}
+
+type CollectionHostAnalysis struct {
+	SystemMonitorID   interface{} `json:"systemMonitorId"` // Can be string or number
+	SystemMonitorName string      `json:"systemMonitorName"`
+	LogSourceCount    int         `json:"logSourceCount"`
+	PingResult        string      `json:"pingResult"`
+	Recommended       bool        `json:"recommended"`
+	LogSources        []LogSource `json:"logSources"`
+}
+
+type ApplyRequest struct {
+	SelectedHosts []string `json:"selectedHosts"`
+}
+
+type BackupRequest struct {
+	Password string `json:"password"`
+	Location string `json:"location"`
+}
+
+type RetirementRecord struct {
+	LogSourceID    interface{} `json:"logSourceId"` // Can be string or number
+	HostID         interface{} `json:"hostId"`      // Can be string or number
+	HostName       string      `json:"hostName"`
+	OriginalName   string      `json:"originalName"`
+	RetiredName    string      `json:"retiredName"`
+	OriginalStatus string      `json:"originalStatus"`
+	RetiredStatus  string      `json:"retiredStatus"`
+	Timestamp      time.Time   `json:"timestamp"`
+}
+
+type JobStatus struct {
+	ID                     string                   `json:"id"`
+	Status                 string                   `json:"status"`
+	Progress               int                      `json:"progress"`
+	Message                string                   `json:"message"`
+	Results                []AnalysisResult         `json:"results,omitempty"`
+	HostAnalysis           []HostAnalysis           `json:"hostAnalysis,omitempty"`
+	CollectionHostAnalysis []CollectionHostAnalysis `json:"collectionHostAnalysis,omitempty"`
+	RetirementRecords      []RetirementRecord       `json:"retirementRecords,omitempty"`
+	Error                  string                   `json:"error,omitempty"`
+	StartTime              time.Time                `json:"startTime"`
+	EndTime                *time.Time               `json:"endTime,omitempty"`
+}
+
+// Global variables
+var (
+	config     *Config
+	httpClient *http.Client
+	jobs       = make(map[string]*JobStatus)
+	jobsMutex  sync.RWMutex
+	upgrader   = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true // Allow all origins for local development
+		},
+	}
+	// WebSocket connection management
+	wsConnections = make(map[*websocket.Conn]bool)
+	wsMutex       sync.RWMutex
+)
+
+func findAvailablePort() int {
+	fmt.Println("LRCleaner - LogRhythm Log Source Management Tool")
+	fmt.Println("================================================")
+	fmt.Println()
+
+	// Check for command line argument first
+	if len(os.Args) > 1 {
+		if port, err := strconv.Atoi(os.Args[1]); err == nil && port > 0 && port <= 65535 {
+			if isPortAvailable(port) {
+				fmt.Printf("Using port %d from command line argument\n", port)
+				return port
+			} else {
+				fmt.Printf("Port %d from command line is not available, finding alternative...\n", port)
+			}
+		}
+	}
+
+	// Try default port 8080 first
+	if isPortAvailable(8080) {
+		fmt.Println("Using default port 8080")
+		return 8080
+	}
+
+	// If 8080 is not available, find an available port starting from 3000
+	fmt.Println("Port 8080 is in use, searching for available port...")
+
+	for port := 3000; port <= 65535; port++ {
+		if isPortAvailable(port) {
+			fmt.Printf("Found available port: %d\n", port)
+			return port
+		}
+	}
+
+	// This should never happen, but just in case
+	fmt.Println("No available ports found, using 8080 anyway")
+	return 8080
+}
+
+func isPortAvailable(port int) bool {
+	address := fmt.Sprintf(":%d", port)
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return false
+	}
+	listener.Close()
+	return true
+}
+
+func openBrowser(url string) {
+	// Wait a moment for the server to start
+	time.Sleep(2 * time.Second)
+
+	var err error
+
+	switch runtime.GOOS {
+	case "linux":
+		err = exec.Command("xdg-open", url).Start()
+	case "windows":
+		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	case "darwin":
+		err = exec.Command("open", url).Start()
+	default:
+		fmt.Printf("Please open your browser and navigate to: %s\n", url)
+		return
+	}
+
+	if err != nil {
+		fmt.Printf("Could not automatically open browser. Please navigate to: %s\n", url)
+	} else {
+		fmt.Printf("Opening browser to: %s\n", url)
+	}
+}
+
+func main() {
+	// Find available port
+	port := findAvailablePort()
+
+	// Initialize configuration
+	config = loadConfig()
+
+	// Setup HTTP client with custom transport
+	httpClient = &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		Timeout: 30 * time.Second,
+	}
+
+	// Setup routes
+	router := mux.NewRouter()
+
+	// Static files (embedded web UI)
+	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./web/static/"))))
+	router.HandleFunc("/", serveIndex)
+
+	// API routes
+	api := router.PathPrefix("/api").Subrouter()
+	api.HandleFunc("/config", handleConfig).Methods("GET", "POST")
+	api.HandleFunc("/test-connection", handleTestConnection).Methods("POST")
+	api.HandleFunc("/test", handleTestMode).Methods("POST")
+	api.HandleFunc("/backup", handleBackup).Methods("POST")
+	api.HandleFunc("/apply", handleApplyMode).Methods("POST")
+	api.HandleFunc("/apply/execute", handleExecuteApply).Methods("POST")
+	api.HandleFunc("/collection-hosts/retire", handleRetireCollectionHosts).Methods("POST")
+	api.HandleFunc("/export/{jobId}", handleExport).Methods("GET")
+	api.HandleFunc("/export/pdf/{jobId}", handleExportPDF).Methods("GET")
+	api.HandleFunc("/jobs/{jobId}", handleJobStatus).Methods("GET")
+	api.HandleFunc("/ws", handleWebSocket)
+
+	// Start server
+	server := &http.Server{
+		Addr:    ":" + strconv.Itoa(port),
+		Handler: router,
+	}
+
+	// Start server in goroutine
+	go func() {
+		url := fmt.Sprintf("http://localhost:%d", port)
+		fmt.Printf("LRCleaner starting on %s\n", url)
+
+		// Open browser automatically
+		go openBrowser(url)
+
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed to start: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	// Graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatal("Server forced to shutdown:", err)
+	}
+
+	fmt.Println("LRCleaner stopped")
+}
+
+func loadConfig() *Config {
+	config := &Config{
+		Hostname: "localhost",
+		Port:     8501,
+		ExcludedLogSources: []string{
+			"Open Collector",
+			"Echo",
+			"AI Engine",
+			"LogRhythm System",
+		},
+	}
+
+	// Try to load from file
+	if data, err := os.ReadFile("config.json"); err == nil {
+		if err := json.Unmarshal(data, config); err != nil {
+			log.Printf("Warning: Failed to parse config.json: %v", err)
+		}
+	}
+
+	return config
+}
+
+func serveIndex(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "./web/index.html")
+}
+
+func handleConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(config)
+	case "POST":
+		var newConfig Config
+		if err := json.NewDecoder(r.Body).Decode(&newConfig); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		config = &newConfig
+
+		// Save to file
+		data, err := json.MarshalIndent(config, "", "  ")
+		if err != nil {
+			log.Printf("Error marshaling config: %v", err)
+			http.Error(w, "Failed to save configuration", http.StatusInternalServerError)
+			return
+		}
+		if err := os.WriteFile("config.json", data, 0644); err != nil {
+			log.Printf("Error writing config file: %v", err)
+			http.Error(w, "Failed to save configuration", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+	}
+}
+
+func handleTestConnection(w http.ResponseWriter, r *http.Request) {
+	var testConfig Config
+	if err := json.NewDecoder(r.Body).Decode(&testConfig); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if testConfig.Hostname == "" || testConfig.APIKey == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Hostname and API key are required",
+		})
+		return
+	}
+
+	// Test the connection by making a simple API call
+	url := fmt.Sprintf("https://%s:%d/lr-admin-api/logsources?count=1&offset=0",
+		testConfig.Hostname, testConfig.Port)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("Failed to create request: %v", err),
+		})
+		return
+	}
+
+	req.Header.Set("Authorization", "Bearer "+testConfig.APIKey)
+
+	// Create a temporary client for testing
+	testClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := testClient.Do(req)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("Connection failed: %v", err),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Connection successful! LogRhythm API is accessible.",
+		})
+	} else {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("API returned status code: %d", resp.StatusCode),
+		})
+	}
+}
+
+func handleTestMode(w http.ResponseWriter, r *http.Request) {
+	log.Println("Test mode request received")
+
+	var request struct {
+		Date string `json:"date"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		log.Printf("Error decoding test mode request: %v", err)
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Test mode request - Date: %s", request.Date)
+
+	// Parse date
+	selectedDate, err := time.Parse("2006-01-02", request.Date)
+	if err != nil {
+		log.Printf("Error parsing date: %v", err)
+		http.Error(w, "Invalid date format", http.StatusBadRequest)
+		return
+	}
+
+	// Create job
+	jobID := fmt.Sprintf("test_%d", time.Now().Unix())
+	job := &JobStatus{
+		ID:        jobID,
+		Status:    "running",
+		Progress:  0,
+		Message:   "Starting analysis...",
+		StartTime: time.Now(),
+	}
+
+	log.Printf("Created test job: %s", jobID)
+
+	jobsMutex.Lock()
+	jobs[jobID] = job
+	jobsMutex.Unlock()
+
+	// Start analysis in background
+	log.Printf("Starting background analysis for job: %s", jobID)
+	go analyzeLogSources(jobID, selectedDate)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"jobId": jobID})
+	log.Printf("Test mode response sent - JobID: %s", jobID)
+}
+
+func handleBackup(w http.ResponseWriter, r *http.Request) {
+	var req BackupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Password == "" {
+		http.Error(w, "Password is required", http.StatusBadRequest)
+		return
+	}
+
+	// Perform SQL backup
+	success, err := performSQLBackup(req.Password, req.Location)
+	if err != nil {
+		log.Printf("Backup error: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": success,
+		"message": "Database backup completed successfully",
+	})
+}
+
+func performSQLBackup(password, location string) (bool, error) {
+	// SQL Server connection string
+	// Assuming LogRhythmEMDB is on localhost with default instance
+	connectionString := fmt.Sprintf("server=localhost;user id=logrhythmadmin;password=%s;database=LogRhythmEMDB;encrypt=disable", password)
+
+	// Open database connection
+	db, err := sql.Open("mssql", connectionString)
+	if err != nil {
+		return false, fmt.Errorf("failed to connect to database: %v", err)
+	}
+	defer db.Close()
+
+	// Test connection
+	if err := db.Ping(); err != nil {
+		return false, fmt.Errorf("failed to ping database: %v", err)
+	}
+
+	// Create backup filename with timestamp
+	timestamp := time.Now().Format("20060102_150405")
+	backupFile := fmt.Sprintf("%s\\LogRhythmEMDB_backup_%s.bak", location, timestamp)
+
+	// Execute backup command
+	backupQuery := fmt.Sprintf("BACKUP DATABASE [LogRhythmEMDB] TO DISK = '%s' WITH FORMAT, INIT, NAME = 'LogRhythmEMDB Full Backup', SKIP, NOREWIND, NOUNLOAD, STATS = 10", backupFile)
+
+	_, err = db.Exec(backupQuery)
+	if err != nil {
+		return false, fmt.Errorf("failed to execute backup: %v", err)
+	}
+
+	log.Printf("Database backup completed successfully: %s", backupFile)
+	return true, nil
+}
+
+func handleApplyMode(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Date string `json:"date"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Parse date
+	selectedDate, err := time.Parse("2006-01-02", request.Date)
+	if err != nil {
+		http.Error(w, "Invalid date format", http.StatusBadRequest)
+		return
+	}
+
+	// Create job
+	jobID := fmt.Sprintf("apply_%d", time.Now().Unix())
+	job := &JobStatus{
+		ID:        jobID,
+		Status:    "running",
+		Progress:  0,
+		Message:   "Analyzing hosts for retirement...",
+		StartTime: time.Now(),
+	}
+
+	jobsMutex.Lock()
+	jobs[jobID] = job
+	jobsMutex.Unlock()
+
+	// Start analysis in background
+	go analyzeHostsForRetirement(jobID, selectedDate)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"jobId": jobID})
+}
+
+func handleExecuteApply(w http.ResponseWriter, r *http.Request) {
+	var request ApplyRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if len(request.SelectedHosts) == 0 {
+		http.Error(w, "No hosts selected", http.StatusBadRequest)
+		return
+	}
+
+	// Create job
+	jobID := fmt.Sprintf("execute_%d", time.Now().Unix())
+	job := &JobStatus{
+		ID:        jobID,
+		Status:    "running",
+		Progress:  0,
+		Message:   "Starting retirement process...",
+		StartTime: time.Now(),
+	}
+
+	jobsMutex.Lock()
+	jobs[jobID] = job
+	jobsMutex.Unlock()
+
+	// Start retirement in background
+	go executeRetirement(jobID, request.SelectedHosts)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"jobId": jobID})
+}
+
+func handleRetireCollectionHosts(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		SelectedCollectionHosts []string `json:"selectedCollectionHosts"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if len(request.SelectedCollectionHosts) == 0 {
+		http.Error(w, "No collection hosts selected", http.StatusBadRequest)
+		return
+	}
+
+	// For now, just log the selected collection hosts
+	// In a real implementation, you would retire the collection hosts here
+	log.Printf("Collection hosts selected for retirement: %v", request.SelectedCollectionHosts)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": fmt.Sprintf("Collection host retirement initiated for %d hosts", len(request.SelectedCollectionHosts)),
+	})
+}
+
+func handleExportPDF(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	jobID := vars["jobId"]
+
+	jobsMutex.RLock()
+	job, exists := jobs[jobID]
+	jobsMutex.RUnlock()
+
+	if !exists {
+		http.Error(w, "Job not found", http.StatusNotFound)
+		return
+	}
+
+	if len(job.RetirementRecords) == 0 {
+		http.Error(w, "No retirement records to export", http.StatusBadRequest)
+		return
+	}
+
+	// Generate text report content
+	reportContent := generateTextReport(job)
+
+	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"LRCleaner_Report_%s.txt\"", jobID))
+	w.Write(reportContent)
+}
+
+func handleExport(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	jobID := vars["jobId"]
+
+	jobsMutex.RLock()
+	job, exists := jobs[jobID]
+	jobsMutex.RUnlock()
+
+	if !exists {
+		http.Error(w, "Job not found", http.StatusNotFound)
+		return
+	}
+
+	if len(job.Results) == 0 {
+		http.Error(w, "No results to export", http.StatusBadRequest)
+		return
+	}
+
+	// Generate CSV
+	csv := "ID,HostID,HostName,MaxLogDate,PingResult\n"
+	for _, result := range job.Results {
+		csv += fmt.Sprintf("%s,%s,%s,%s,%s\n",
+			idToString(result.ID), idToString(result.HostID), result.HostName, result.MaxLogDate, result.PingResult)
+	}
+
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"LRCleaner_Results_%s.csv\"", jobID))
+	w.Write([]byte(csv))
+}
+
+func handleJobStatus(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	jobID := vars["jobId"]
+
+	jobsMutex.RLock()
+	job, exists := jobs[jobID]
+	jobsMutex.RUnlock()
+
+	if !exists {
+		http.Error(w, "Job not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(job)
+}
+
+// Broadcast job update to all WebSocket connections
+func broadcastJobUpdate(job *JobStatus) {
+	wsMutex.RLock()
+	defer wsMutex.RUnlock()
+
+	log.Printf("Broadcasting job update for job %s to %d WebSocket connections", job.ID, len(wsConnections))
+
+	for conn := range wsConnections {
+		if err := conn.WriteJSON(job); err != nil {
+			log.Printf("Error broadcasting job update via WebSocket: %v", err)
+			// Remove failed connection
+			delete(wsConnections, conn)
+			conn.Close()
+		} else {
+			log.Printf("Successfully broadcasted job update to WebSocket connection")
+		}
+	}
+}
+
+func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	log.Printf("WebSocket connection attempt from %s", r.RemoteAddr)
+	log.Printf("WebSocket request headers: %v", r.Header)
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket upgrade failed: %v", err)
+		http.Error(w, "WebSocket upgrade failed", http.StatusBadRequest)
+		return
+	}
+	defer conn.Close()
+
+	log.Printf("WebSocket upgrade successful for %s", r.RemoteAddr)
+
+	// Register connection
+	wsMutex.Lock()
+	wsConnections[conn] = true
+	log.Printf("WebSocket connection registered. Total connections: %d", len(wsConnections))
+	wsMutex.Unlock()
+
+	// Send current job statuses
+	jobsMutex.RLock()
+	for _, job := range jobs {
+		if err := conn.WriteJSON(job); err != nil {
+			log.Printf("Error sending job status via WebSocket: %v", err)
+			break
+		}
+	}
+	jobsMutex.RUnlock()
+
+	// Keep connection alive
+	for {
+		_, _, err := conn.ReadMessage()
+		if err != nil {
+			log.Println("WebSocket connection closed:", err)
+			// Remove connection
+			wsMutex.Lock()
+			delete(wsConnections, conn)
+			wsMutex.Unlock()
+			break
+		}
+	}
+}
+
+func analyzeLogSources(jobID string, selectedDate time.Time) {
+	log.Printf("Starting analyzeLogSources for job: %s, date: %s", jobID, selectedDate.Format("2006-01-02"))
+
+	jobsMutex.Lock()
+	job := jobs[jobID]
+	jobsMutex.Unlock()
+
+	defer func() {
+		jobsMutex.Lock()
+		now := time.Now()
+		job.EndTime = &now
+		if job.Status == "running" {
+			job.Status = "completed"
+		}
+		jobsMutex.Unlock()
+		log.Printf("Completed analyzeLogSources for job: %s", jobID)
+	}()
+
+	// Get all log sources
+	log.Printf("Getting all log sources for job: %s", jobID)
+	allLogSources, err := getAllLogSources()
+	if err != nil {
+		log.Printf("Error getting log sources for job %s: %v", jobID, err)
+		jobsMutex.Lock()
+		job.Status = "error"
+		job.Error = err.Error()
+		jobsMutex.Unlock()
+		return
+	}
+
+	log.Printf("Retrieved %d log sources for job: %s", len(allLogSources), jobID)
+
+	// Update progress
+	jobsMutex.Lock()
+	job.Progress = 25
+	job.Message = fmt.Sprintf("Found %d log sources. Filtering...", len(allLogSources))
+	jobsMutex.Unlock()
+
+	// Filter log sources
+	var filteredSources []LogSource
+	for _, ls := range allLogSources {
+		// Check date
+		if maxLogDate, err := time.Parse(time.RFC3339, ls.MaxLogDate); err == nil {
+			if maxLogDate.After(selectedDate) {
+				continue
+			}
+		}
+
+		// Check if already retired
+		if ls.RecordStatus == "Retired" {
+			continue
+		}
+
+		// Check excluded sources
+		excluded := false
+		sourceType := ls.LogSourceType.Name
+		sourceName := ls.Name
+		hostName := ls.Host.Name
+
+		// Exclude LogRhythm system monitor agents
+		if strings.HasPrefix(sourceType, "LogRhythm") {
+			excluded = true
+		}
+
+		// Exclude echo hosts and log sources
+		if containsIgnoreCase(hostName, "echo") || containsIgnoreCase(sourceName, "echo") {
+			excluded = true
+		}
+
+		// Check config excluded sources
+		if !excluded {
+			for _, pattern := range config.ExcludedLogSources {
+				if containsIgnoreCase(sourceType, pattern) {
+					excluded = true
+					break
+				}
+			}
+		}
+
+		if !excluded {
+			filteredSources = append(filteredSources, ls)
+		}
+	}
+
+	// Update progress
+	jobsMutex.Lock()
+	job.Progress = 50
+	job.Message = "Testing host connectivity..."
+	jobsMutex.Unlock()
+
+	// Collect unique hostnames for concurrent ping testing
+	hostnameSet := make(map[string]bool)
+	for _, ls := range filteredSources {
+		hostnameSet[ls.Host.Name] = true
+	}
+
+	uniqueHostnames := make([]string, 0, len(hostnameSet))
+	for hostname := range hostnameSet {
+		uniqueHostnames = append(uniqueHostnames, hostname)
+	}
+
+	log.Printf("Testing connectivity to %d unique hosts concurrently...", len(uniqueHostnames))
+
+	// Update progress
+	jobsMutex.Lock()
+	job.Progress = 50
+	job.Message = fmt.Sprintf("Testing connectivity to %d hosts...", len(uniqueHostnames))
+	jobsMutex.Unlock()
+
+	// Perform concurrent ping testing
+	pingResults := pingHostsConcurrent(uniqueHostnames)
+
+	// Update progress
+	jobsMutex.Lock()
+	job.Progress = 75
+	job.Message = "Processing results..."
+	jobsMutex.Unlock()
+
+	// Analyze each source using the ping results
+	var results []AnalysisResult
+	for i, ls := range filteredSources {
+		// Update progress
+		jobsMutex.Lock()
+		job.Progress = 75 + (i * 25 / len(filteredSources))
+		job.Message = fmt.Sprintf("Processing %s...", ls.Host.Name)
+		jobsMutex.Unlock()
+
+		// Get ping result from our concurrent test
+		pingResult := pingResults[ls.Host.Name]
+
+		// Create result
+		result := AnalysisResult{
+			ID:            ls.ID,
+			HostID:        ls.Host.ID,
+			HostName:      ls.Host.Name,
+			Name:          ls.Name,
+			LogSourceType: ls.LogSourceType.Name,
+			MaxLogDate:    ls.MaxLogDate,
+			PingResult:    pingResult,
+		}
+
+		results = append(results, result)
+	}
+
+	// Update job with results
+	jobsMutex.Lock()
+	job.Results = results
+	jobsMutex.Unlock()
+
+	// Broadcast the update to WebSocket clients
+	broadcastJobUpdate(job)
+
+	// Complete
+	jobsMutex.Lock()
+	job.Progress = 100
+	job.Message = fmt.Sprintf("Analysis complete. Found %d sources.", len(results))
+	job.Status = "completed"
+	now := time.Now()
+	job.EndTime = &now
+	jobsMutex.Unlock()
+
+	// Broadcast the completion to WebSocket clients
+	broadcastJobUpdate(job)
+
+	// Log summary
+	successCount := 0
+	failureCount := 0
+	unknownCount := 0
+	for _, result := range results {
+		switch result.PingResult {
+		case "Success":
+			successCount++
+		case "Failure":
+			failureCount++
+		default:
+			unknownCount++
+		}
+	}
+	log.Printf("Test Mode Analysis Complete:")
+	log.Printf("  Total log sources analyzed: %d", len(results))
+	log.Printf("  Successful pings: %d", successCount)
+	log.Printf("  Failed pings: %d", failureCount)
+	log.Printf("  Unknown ping results: %d", unknownCount)
+}
+
+func getAllLogSources() ([]LogSource, error) {
+	var allSources []LogSource
+	offset := 0
+	count := 1000
+
+	for {
+		url := fmt.Sprintf("https://%s:%d/lr-admin-api/logsources?count=%d&offset=%d",
+			config.Hostname, config.Port, count, offset)
+
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("Authorization", "Bearer "+config.APIKey)
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("API request failed with status: %d", resp.StatusCode)
+		}
+
+		// Try to decode as object first (expected format)
+		var response struct {
+			Count int         `json:"count"`
+			Items []LogSource `json:"items"`
+		}
+
+		// Read the response body
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		// Log first 200 characters of response for debugging
+		responsePreview := string(bodyBytes)
+		if len(responsePreview) > 200 {
+			responsePreview = responsePreview[:200] + "..."
+		}
+		log.Printf("API Response preview: %s", responsePreview)
+
+		// Try to decode as array format first (LogRhythm API returns arrays)
+		var directArray []LogSource
+		if err := json.Unmarshal(bodyBytes, &directArray); err != nil {
+			log.Printf("Failed to decode as array format, trying object format: %v", err)
+			// If that fails, try to decode as object format
+			if err := json.Unmarshal(bodyBytes, &response); err != nil {
+				return nil, fmt.Errorf("failed to decode response as array or object: %v", err)
+			}
+			log.Printf("Successfully decoded as object format, got %d items", len(response.Items))
+			// Use object format
+			allSources = append(allSources, response.Items...)
+			if len(response.Items) < count {
+				break
+			}
+		} else {
+			log.Printf("Successfully decoded as array format, got %d items", len(directArray))
+			// Use direct array
+			allSources = append(allSources, directArray...)
+			if len(directArray) < count {
+				break
+			}
+		}
+
+		offset += count
+	}
+
+	return allSources, nil
+}
+
+// Fast ping implementation for single host
+func pingHostFast(hostname string) string {
+	// Test most common ports with short timeouts
+	ports := []string{"443", "80", "22", "3389"}
+
+	for _, port := range ports {
+		conn, err := net.DialTimeout("tcp", hostname+":"+port, 500*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return "Success"
+		}
+	}
+	return "Failure"
+}
+
+// Concurrent ping testing for multiple hosts
+func pingHostsConcurrent(hostnames []string) map[string]string {
+	results := make(map[string]string)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// Limit concurrent connections to avoid overwhelming the system
+	maxConcurrent := 50
+	semaphore := make(chan struct{}, maxConcurrent)
+
+	log.Printf("Starting concurrent ping test for %d hosts (max %d concurrent)", len(hostnames), maxConcurrent)
+	startTime := time.Now()
+
+	for _, hostname := range hostnames {
+		wg.Add(1)
+		go func(host string) {
+			defer wg.Done()
+
+			// Acquire semaphore
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			result := pingHostFast(host)
+
+			mu.Lock()
+			results[host] = result
+			mu.Unlock()
+		}(hostname)
+	}
+
+	wg.Wait()
+	duration := time.Since(startTime)
+
+	successCount := 0
+	for _, result := range results {
+		if result == "Success" {
+			successCount++
+		}
+	}
+
+	log.Printf("Ping test completed in %v: %d/%d hosts reachable (%.1f%% success rate)",
+		duration, successCount, len(hostnames), float64(successCount)/float64(len(hostnames))*100)
+
+	return results
+}
+
+// Legacy function for backward compatibility
+func pingHost(hostname string) string {
+	return pingHostFast(hostname)
+}
+
+func containsIgnoreCase(s, substr string) bool {
+	// Simple case-insensitive contains check
+	// Convert both strings to lowercase for comparison
+	s = strings.ToLower(s)
+	substr = strings.ToLower(substr)
+	return strings.Contains(s, substr)
+}
+
+// Helper function to convert interface{} ID to string
+func idToString(id interface{}) string {
+	switch v := id.(type) {
+	case string:
+		return v
+	case int:
+		return strconv.Itoa(v)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case float64:
+		return strconv.FormatFloat(v, 'f', 0, 64)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+func analyzeHostsForRetirement(jobID string, selectedDate time.Time) {
+	jobsMutex.Lock()
+	job := jobs[jobID]
+	jobsMutex.Unlock()
+
+	defer func() {
+		jobsMutex.Lock()
+		now := time.Now()
+		job.EndTime = &now
+		if job.Status == "running" {
+			job.Status = "completed"
+		}
+		jobsMutex.Unlock()
+
+		// Broadcast the completion to WebSocket clients
+		broadcastJobUpdate(job)
+	}()
+
+	// Get all log sources
+	allLogSources, err := getAllLogSources()
+	if err != nil {
+		jobsMutex.Lock()
+		job.Status = "error"
+		job.Error = err.Error()
+		jobsMutex.Unlock()
+		return
+	}
+
+	// Update progress
+	jobsMutex.Lock()
+	job.Progress = 25
+	job.Message = fmt.Sprintf("Found %d log sources. Analyzing hosts...", len(allLogSources))
+	jobsMutex.Unlock()
+
+	// Broadcast the update to WebSocket clients
+	broadcastJobUpdate(job)
+
+	// Filter by date and excluded sources
+	var filteredSources []LogSource
+	for _, ls := range allLogSources {
+		// Check date
+		if maxLogDate, err := time.Parse(time.RFC3339, ls.MaxLogDate); err == nil {
+			if maxLogDate.After(selectedDate) {
+				continue
+			}
+		}
+
+		// Check if already retired
+		if ls.RecordStatus == "Retired" {
+			continue
+		}
+
+		// Check excluded sources
+		excluded := false
+		sourceType := ls.LogSourceType.Name
+		sourceName := ls.Name
+		hostName := ls.Host.Name
+
+		// Exclude LogRhythm system monitor agents
+		if strings.HasPrefix(sourceType, "LogRhythm") {
+			excluded = true
+		}
+
+		// Exclude echo hosts and log sources
+		if containsIgnoreCase(hostName, "echo") || containsIgnoreCase(sourceName, "echo") {
+			excluded = true
+		}
+
+		// Check config excluded sources
+		if !excluded {
+			for _, pattern := range config.ExcludedLogSources {
+				if containsIgnoreCase(sourceType, pattern) {
+					excluded = true
+					break
+				}
+			}
+		}
+
+		if !excluded {
+			filteredSources = append(filteredSources, ls)
+		}
+	}
+
+	// Group by host
+	hostMap := make(map[string]*HostAnalysis)
+	for _, ls := range filteredSources {
+		hostID := idToString(ls.Host.ID)
+		hostName := ls.Host.Name
+
+		if hostMap[hostID] == nil {
+			hostMap[hostID] = &HostAnalysis{
+				HostID:     ls.Host.ID, // Keep original interface{} type
+				HostName:   hostName,
+				LogSources: []LogSource{},
+			}
+		}
+
+		hostMap[hostID].LogSources = append(hostMap[hostID].LogSources, ls)
+		hostMap[hostID].LogSourceCount++
+
+		// Update max log date
+		if hostMap[hostID].MaxLogDate == "" || ls.MaxLogDate < hostMap[hostID].MaxLogDate {
+			hostMap[hostID].MaxLogDate = ls.MaxLogDate
+		}
+	}
+
+	// Collect unique hostnames for concurrent ping testing
+	hostnames := make([]string, 0, len(hostMap))
+	for _, host := range hostMap {
+		hostnames = append(hostnames, host.HostName)
+	}
+
+	log.Printf("Testing connectivity to %d hosts concurrently...", len(hostnames))
+
+	// Update progress
+	jobsMutex.Lock()
+	job.Progress = 50
+	job.Message = fmt.Sprintf("Testing connectivity to %d hosts...", len(hostnames))
+	jobsMutex.Unlock()
+
+	// Broadcast the update to WebSocket clients
+	broadcastJobUpdate(job)
+
+	// Perform concurrent ping testing
+	pingResults := pingHostsConcurrent(hostnames)
+
+	// Update progress
+	jobsMutex.Lock()
+	job.Progress = 75
+	job.Message = "Processing host analysis..."
+	jobsMutex.Unlock()
+
+	// Broadcast the update to WebSocket clients
+	broadcastJobUpdate(job)
+
+	// Analyze each host using the ping results
+	var hostAnalysis []HostAnalysis
+	hostCount := 0
+	for _, host := range hostMap {
+		hostCount++
+		log.Printf("Host analysis %d/%d: Processing host %s (%d log sources)",
+			hostCount, len(hostMap), host.HostName, host.LogSourceCount)
+
+		// Get ping result from our concurrent test
+		host.PingResult = pingResults[host.HostName]
+
+		// Determine if recommended for retirement
+		// Recommend if ping fails or no recent logs
+		host.Recommended = (host.PingResult == "Failure") ||
+			(host.MaxLogDate != "" &&
+				time.Since(parseTime(host.MaxLogDate)) > 30*24*time.Hour)
+
+		// Log recommendation
+		if host.Recommended {
+			log.Printf("  → Host %s is RECOMMENDED for retirement", host.HostName)
+		} else {
+			log.Printf("  → Host %s is NOT recommended for retirement", host.HostName)
+		}
+
+		hostAnalysis = append(hostAnalysis, *host)
+	}
+
+	// Update job with host analysis
+	jobsMutex.Lock()
+	job.Progress = 100
+	job.Message = fmt.Sprintf("Host analysis complete. Found %d hosts.", len(hostAnalysis))
+	job.HostAnalysis = hostAnalysis
+	jobsMutex.Unlock()
+
+	// Broadcast the update to WebSocket clients
+	broadcastJobUpdate(job)
+
+	// Log summary
+	recommendedCount := 0
+	for _, host := range hostAnalysis {
+		if host.Recommended {
+			recommendedCount++
+		}
+	}
+	log.Printf("Apply Mode Host Analysis Complete:")
+	log.Printf("  Total hosts analyzed: %d", len(hostAnalysis))
+	log.Printf("  Recommended for retirement: %d", recommendedCount)
+	log.Printf("  Not recommended: %d", len(hostAnalysis)-recommendedCount)
+}
+
+func analyzeCollectionHosts(jobID string) []CollectionHostAnalysis {
+	log.Printf("Starting collection host analysis for job: %s", jobID)
+
+	// Get all log sources
+	allLogSources, err := getAllLogSources()
+	if err != nil {
+		log.Printf("Error getting log sources for collection host analysis: %v", err)
+		return nil
+	}
+
+	// Group by collection host (system monitor)
+	collectionHostMap := make(map[string]*CollectionHostAnalysis)
+	for _, ls := range allLogSources {
+		if ls.SystemMonitorID == nil || ls.SystemMonitorName == "" {
+			continue // Skip log sources without collection host info
+		}
+
+		collectionHostID := idToString(ls.SystemMonitorID)
+		collectionHostName := ls.SystemMonitorName
+
+		if collectionHostMap[collectionHostID] == nil {
+			collectionHostMap[collectionHostID] = &CollectionHostAnalysis{
+				SystemMonitorID:   ls.SystemMonitorID,
+				SystemMonitorName: collectionHostName,
+				LogSources:        []LogSource{},
+			}
+		}
+
+		collectionHostMap[collectionHostID].LogSources = append(collectionHostMap[collectionHostID].LogSources, ls)
+		collectionHostMap[collectionHostID].LogSourceCount++
+	}
+
+	// Test connectivity to collection hosts
+	collectionHostnames := make([]string, 0, len(collectionHostMap))
+	for _, ch := range collectionHostMap {
+		collectionHostnames = append(collectionHostnames, ch.SystemMonitorName)
+	}
+
+	log.Printf("Testing connectivity to %d collection hosts...", len(collectionHostnames))
+	pingResults := pingHostsConcurrent(collectionHostnames)
+
+	// Analyze each collection host
+	var collectionHostAnalysis []CollectionHostAnalysis
+	for _, ch := range collectionHostMap {
+		ch.PingResult = pingResults[ch.SystemMonitorName]
+
+		// Recommend for retirement if:
+		// 1. Ping fails AND has zero log sources, OR
+		// 2. Has zero log sources (regardless of ping status)
+		ch.Recommended = (ch.PingResult == "Failure" && ch.LogSourceCount == 0) ||
+			(ch.LogSourceCount == 0)
+
+		if ch.Recommended {
+			log.Printf("Collection host %s is RECOMMENDED for retirement (Ping: %s, Log Sources: %d)",
+				ch.SystemMonitorName, ch.PingResult, ch.LogSourceCount)
+		}
+
+		collectionHostAnalysis = append(collectionHostAnalysis, *ch)
+	}
+
+	log.Printf("Collection Host Analysis Complete:")
+	log.Printf("  Total collection hosts analyzed: %d", len(collectionHostAnalysis))
+	recommendedCount := 0
+	for _, ch := range collectionHostAnalysis {
+		if ch.Recommended {
+			recommendedCount++
+		}
+	}
+	log.Printf("  Recommended for retirement: %d", recommendedCount)
+
+	// If there are recommended collection hosts, process them for retirement
+	if recommendedCount > 0 {
+		log.Printf("Processing recommended collection hosts for retirement...")
+		retiredCount := 0
+
+		for _, ch := range collectionHostAnalysis {
+			if ch.Recommended {
+				log.Printf("Processing collection host %s (ID: %s) for retirement...", ch.SystemMonitorName, idToString(ch.SystemMonitorID))
+
+				// First unlicense the system monitor
+				if unlicenseSystemMonitor(ch.SystemMonitorID) {
+					log.Printf("  ✓ Successfully unlicensed collection host: %s", ch.SystemMonitorName)
+
+					// Then retire the system monitor
+					if retireSystemMonitor(ch.SystemMonitorID) {
+						retiredCount++
+						log.Printf("  ✓ Successfully retired collection host: %s", ch.SystemMonitorName)
+					} else {
+						log.Printf("  ✗ Failed to retire collection host: %s", ch.SystemMonitorName)
+					}
+				} else {
+					log.Printf("  ✗ Failed to unlicense collection host: %s", ch.SystemMonitorName)
+				}
+			}
+		}
+
+		log.Printf("Collection Host Retirement Summary:")
+		log.Printf("  Collection hosts processed: %d", recommendedCount)
+		log.Printf("  Collection hosts successfully retired: %d", retiredCount)
+	}
+
+	return collectionHostAnalysis
+}
+
+func executeRetirement(jobID string, selectedHosts []string) {
+	jobsMutex.Lock()
+	job := jobs[jobID]
+	jobsMutex.Unlock()
+
+	defer func() {
+		jobsMutex.Lock()
+		now := time.Now()
+		job.EndTime = &now
+		if job.Status == "running" {
+			job.Status = "completed"
+		}
+		jobsMutex.Unlock()
+	}()
+
+	// Get the host analysis from the previous job
+	var hostAnalysis []HostAnalysis
+	jobsMutex.RLock()
+	for _, otherJob := range jobs {
+		if len(otherJob.HostAnalysis) > 0 {
+			hostAnalysis = otherJob.HostAnalysis
+			break
+		}
+	}
+	jobsMutex.RUnlock()
+
+	if len(hostAnalysis) == 0 {
+		jobsMutex.Lock()
+		job.Status = "error"
+		job.Error = "No host analysis found. Please run Apply Mode analysis first."
+		jobsMutex.Unlock()
+		return
+	}
+
+	// Create map of selected hosts
+	selectedMap := make(map[string]bool)
+	for _, hostID := range selectedHosts {
+		selectedMap[hostID] = true
+	}
+
+	// Find hosts to retire
+	var hostsToRetire []HostAnalysis
+	for _, host := range hostAnalysis {
+		if selectedMap[idToString(host.HostID)] {
+			hostsToRetire = append(hostsToRetire, host)
+		}
+	}
+
+	// Process each host
+	processedLogSources := 0
+	var retirementRecords []RetirementRecord
+
+	for i, host := range hostsToRetire {
+		jobsMutex.Lock()
+		job.Progress = (i * 100) / len(hostsToRetire)
+		job.Message = fmt.Sprintf("Retiring host %s (%d log sources)...", host.HostName, host.LogSourceCount)
+		jobsMutex.Unlock()
+
+		log.Printf("Retirement %d/%d: Processing host %s (%d log sources)",
+			i+1, len(hostsToRetire), host.HostName, host.LogSourceCount)
+
+		// Retire all log sources for this host
+		for j, logSource := range host.LogSources {
+			log.Printf("  → Retiring log source %d/%d: %s",
+				j+1, len(host.LogSources), logSource.Name)
+			// Create retirement record before making changes
+			record := RetirementRecord{
+				LogSourceID:    logSource.ID,
+				HostID:         host.HostID,
+				HostName:       host.HostName,
+				OriginalName:   logSource.Name,
+				RetiredName:    logSource.Name + " Retired by LRCleaner",
+				OriginalStatus: logSource.RecordStatus,
+				RetiredStatus:  "Retired",
+				Timestamp:      time.Now(),
+			}
+
+			// Check if log source is already retired
+			if logSource.RecordStatus == "Retired" {
+				log.Printf("    ⚠ Log source %s is already retired, skipping", logSource.Name)
+				continue
+			}
+
+			// Update via API (the function now handles getting, modifying, and putting the log source)
+			success := updateLogSource(logSource.ID)
+			if success {
+				processedLogSources++
+				retirementRecords = append(retirementRecords, record)
+				log.Printf("    ✓ Successfully retired: %s", logSource.Name)
+			} else {
+				log.Printf("    ✗ Failed to retire: %s", logSource.Name)
+			}
+		}
+	}
+
+	// Complete
+	jobsMutex.Lock()
+	job.Progress = 100
+	job.Message = fmt.Sprintf("Retirement complete. Processed %d log sources across %d hosts.", processedLogSources, len(hostsToRetire))
+	job.RetirementRecords = retirementRecords
+	jobsMutex.Unlock()
+
+	// Log summary
+	totalAttempted := 0
+	for _, host := range hostsToRetire {
+		totalAttempted += len(host.LogSources)
+	}
+	log.Printf("Retirement Process Complete:")
+	log.Printf("  Hosts processed: %d", len(hostsToRetire))
+	log.Printf("  Log sources successfully retired: %d", processedLogSources)
+	log.Printf("  Total log sources attempted: %d", totalAttempted)
+
+	// Retire system monitor agents that have no remaining active log sources
+	log.Printf("Checking system monitor agents for retirement...")
+	retiredAgents := 0
+	uniqueAgents := make(map[string]bool)
+
+	// Collect unique system monitor agent IDs from the retirement records
+	for _, record := range retirementRecords {
+		// Find the system monitor ID for this log source
+		for _, host := range hostsToRetire {
+			for _, logSource := range host.LogSources {
+				if idToString(logSource.ID) == idToString(record.LogSourceID) && logSource.SystemMonitorID != nil {
+					agentID := idToString(logSource.SystemMonitorID)
+					uniqueAgents[agentID] = true
+					log.Printf("Found system monitor agent %s for retired log source %s", agentID, record.OriginalName)
+					break
+				}
+			}
+		}
+	}
+
+	log.Printf("Total unique system monitor agents from retirement records: %d", len(uniqueAgents))
+
+	// Check each unique system monitor agent for retirement
+	for agentID := range uniqueAgents {
+		log.Printf("Checking system monitor agent %s for retirement...", agentID)
+
+		// Check if agent has any remaining active log sources
+		hasActiveLogSources := checkAgentHasActiveLogSources(agentID)
+		log.Printf("System monitor agent %s active log sources check result: %t", agentID, hasActiveLogSources)
+
+		if !hasActiveLogSources {
+			log.Printf("System monitor agent %s has no active log sources, proceeding with retirement...", agentID)
+
+			// Retire the system monitor agent
+			if retireSystemMonitor(agentID) {
+				retiredAgents++
+				log.Printf("  ✓ Successfully retired system monitor agent: %s", agentID)
+			} else {
+				log.Printf("  ✗ Failed to retire system monitor agent: %s", agentID)
+			}
+		} else {
+			log.Printf("System monitor agent %s still has active log sources, skipping agent retirement", agentID)
+		}
+	}
+
+	log.Printf("System Monitor Agent Retirement Summary:")
+	log.Printf("  Agents checked: %d", len(uniqueAgents))
+	log.Printf("  Agents successfully retired: %d", retiredAgents)
+
+	// Check and retire hosts that have no remaining active log sources
+	log.Printf("Checking hosts for retirement...")
+	retiredHosts := 0
+	uniqueHosts := make(map[string]bool)
+
+	// Collect unique host IDs from the retirement records
+	for _, record := range retirementRecords {
+		hostID := idToString(record.HostID)
+		uniqueHosts[hostID] = true
+		log.Printf("Found retirement record for host %s (log source: %s)", hostID, record.OriginalName)
+	}
+
+	log.Printf("Total unique hosts from retirement records: %d", len(uniqueHosts))
+
+	// Check each unique host for retirement
+	for hostID := range uniqueHosts {
+		log.Printf("=== HOST RETIREMENT PROCESS STARTING ===")
+		log.Printf("Checking host %s for retirement...", hostID)
+
+		// Check if host has any remaining active log sources
+		hasActiveLogSources := checkHostHasActiveLogSources(hostID)
+		log.Printf("Host %s active log sources check result: %t", hostID, hasActiveLogSources)
+
+		if !hasActiveLogSources {
+			log.Printf("Host %s has no active log sources, proceeding with retirement...", hostID)
+
+			// Step 1: Find and retire any associated system monitor agents FIRST
+			log.Printf("=== STEP 1: AGENT RETIREMENT ===")
+			systemMonitorID := getSystemMonitorIDForHost(hostID, retirementRecords, hostsToRetire)
+			if systemMonitorID != "" {
+				log.Printf("Found system monitor agent %s associated with host %s", systemMonitorID, hostID)
+				log.Printf("DEBUG: About to retire agent %s before retiring host %s", systemMonitorID, hostID)
+
+				// First unlicense the system monitor
+				log.Printf("DEBUG: Calling unlicenseSystemMonitor for agent %s", systemMonitorID)
+				if unlicenseSystemMonitor(systemMonitorID) {
+					log.Printf("  ✓ Successfully unlicensed system monitor agent: %s", systemMonitorID)
+
+					// Then retire the system monitor
+					log.Printf("DEBUG: Calling retireSystemMonitor for agent %s", systemMonitorID)
+					if retireSystemMonitor(systemMonitorID) {
+						log.Printf("  ✓ Successfully retired system monitor agent: %s", systemMonitorID)
+						log.Printf("DEBUG: Agent %s retirement completed successfully", systemMonitorID)
+					} else {
+						log.Printf("  ✗ Failed to retire system monitor agent: %s", systemMonitorID)
+						log.Printf("DEBUG: Agent %s retirement failed, but continuing with host retirement", systemMonitorID)
+					}
+				} else {
+					log.Printf("  ✗ Failed to unlicense system monitor agent: %s", systemMonitorID)
+					log.Printf("DEBUG: Agent %s unlicensing failed, but continuing with host retirement", systemMonitorID)
+				}
+			} else {
+				log.Printf("No system monitor agent found for host %s", hostID)
+				log.Printf("DEBUG: No agent retirement needed for host %s", hostID)
+			}
+
+			// Step 2: Remove identifiers from host
+			log.Printf("=== STEP 2: HOST IDENTIFIER REMOVAL ===")
+			log.Printf("DEBUG: About to remove identifiers from host %s", hostID)
+			log.Printf("Removing identifiers from host %s...", hostID)
+
+			// Step 3: Retire the host
+			log.Printf("=== STEP 3: HOST RETIREMENT ===")
+			log.Printf("DEBUG: About to retire host %s", hostID)
+			if updateHost(hostID) {
+				retiredHosts++
+				log.Printf("  ✓ Successfully retired host: %s", hostID)
+				log.Printf("DEBUG: Host %s retirement completed successfully", hostID)
+			} else {
+				log.Printf("  ✗ Failed to retire host: %s", hostID)
+				log.Printf("DEBUG: Host %s retirement failed", hostID)
+			}
+			log.Printf("=== HOST RETIREMENT PROCESS COMPLETED ===")
+		} else {
+			log.Printf("Host %s still has active log sources, skipping host retirement", hostID)
+		}
+	}
+
+	log.Printf("Host Retirement Summary:")
+	log.Printf("  Hosts checked: %d", len(uniqueHosts))
+	log.Printf("  Hosts successfully retired: %d", retiredHosts)
+
+	// Analyze collection hosts after retirement
+	log.Printf("Analyzing collection hosts after retirement...")
+	collectionHostAnalysis := analyzeCollectionHosts(jobID)
+
+	// Update job with collection host analysis
+	jobsMutex.Lock()
+	job.CollectionHostAnalysis = collectionHostAnalysis
+	jobsMutex.Unlock()
+
+	// Broadcast the collection host analysis update
+	broadcastJobUpdate(job)
+}
+
+func parseTime(timeStr string) time.Time {
+	if t, err := time.Parse(time.RFC3339, timeStr); err == nil {
+		return t
+	}
+	return time.Time{}
+}
+
+func getSystemMonitorIDForHost(hostID interface{}, retirementRecords []RetirementRecord, hostsToRetire []HostAnalysis) string {
+	// Find the system monitor ID for this host by looking at the retirement records
+	log.Printf("DEBUG: Searching for system monitor ID for host %s", hostID)
+	log.Printf("DEBUG: Checking %d retirement records", len(retirementRecords))
+
+	for _, record := range retirementRecords {
+		log.Printf("DEBUG: Checking retirement record for host %s (log source: %s)", idToString(record.HostID), record.OriginalName)
+		if idToString(record.HostID) == hostID {
+			// Find the system monitor ID for this log source
+			for _, host := range hostsToRetire {
+				for _, logSource := range host.LogSources {
+					if idToString(logSource.ID) == idToString(record.LogSourceID) && logSource.SystemMonitorID != nil {
+						systemMonitorID := idToString(logSource.SystemMonitorID)
+						log.Printf("DEBUG: Found system monitor ID %s for host %s via log source %s", systemMonitorID, hostID, record.OriginalName)
+						return systemMonitorID
+					}
+				}
+			}
+		}
+	}
+	log.Printf("DEBUG: No system monitor ID found for host %s", hostID)
+	return ""
+}
+
+func checkAgentHasActiveLogSources(agentID interface{}) bool {
+	// Check if the system monitor agent has any remaining active log sources (excluding LogRhythm and echo sources)
+	url := fmt.Sprintf("https://%s:%d/lr-admin-api/logsources?systemMonitorId=%s&recordStatus=active", config.Hostname, config.Port, idToString(agentID))
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Printf("Error creating request to check agent %s log sources: %v", idToString(agentID), err)
+		return true // Assume it has log sources if we can't check
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error checking log sources for agent %s: %v", idToString(agentID), err)
+		return true // Assume it has log sources if we can't check
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Failed to check log sources for agent %s, status: %d", idToString(agentID), resp.StatusCode)
+		return true // Assume it has log sources if we can't check
+	}
+
+	// Parse the response - try array format first
+	var allLogSources []LogSource
+	if err := json.NewDecoder(resp.Body).Decode(&allLogSources); err != nil {
+		// Try object format
+		var responseObj map[string]interface{}
+		resp.Body.Close()
+
+		req, err = http.NewRequest("GET", url, nil)
+		if err != nil {
+			return true
+		}
+		req.Header.Set("Authorization", "Bearer "+config.APIKey)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err = httpClient.Do(req)
+		if err != nil {
+			return true
+		}
+		defer resp.Body.Close()
+
+		if err := json.NewDecoder(resp.Body).Decode(&responseObj); err != nil {
+			return true
+		}
+
+		if items, ok := responseObj["items"].([]interface{}); ok {
+			// Convert items to LogSource structs
+			for _, item := range items {
+				if itemMap, ok := item.(map[string]interface{}); ok {
+					var ls LogSource
+					if lsBytes, err := json.Marshal(itemMap); err == nil {
+						if err := json.Unmarshal(lsBytes, &ls); err == nil {
+							allLogSources = append(allLogSources, ls)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Apply the same filtering logic as in analyzeHostsForRetirement
+	var filteredLogSources []LogSource
+	for _, ls := range allLogSources {
+		// Check if already retired
+		if ls.RecordStatus == "Retired" {
+			continue
+		}
+
+		// Check excluded sources
+		excluded := false
+		sourceType := ls.LogSourceType.Name
+		sourceName := ls.Name
+		hostName := ls.Host.Name
+
+		// Exclude LogRhythm system monitor agents
+		if strings.HasPrefix(sourceType, "LogRhythm") {
+			excluded = true
+		}
+
+		// Exclude echo hosts and log sources
+		if containsIgnoreCase(hostName, "echo") || containsIgnoreCase(sourceName, "echo") {
+			excluded = true
+		}
+
+		// Check config excluded sources
+		if !excluded {
+			for _, pattern := range config.ExcludedLogSources {
+				if containsIgnoreCase(sourceType, pattern) {
+					excluded = true
+					break
+				}
+			}
+		}
+
+		if !excluded {
+			filteredLogSources = append(filteredLogSources, ls)
+		}
+	}
+
+	hasActiveLogSources := len(filteredLogSources) > 0
+	log.Printf("System monitor agent %s has %d total log sources, %d filterable log sources (after excluding LogRhythm/echo)",
+		idToString(agentID), len(allLogSources), len(filteredLogSources))
+	return hasActiveLogSources
+}
+
+func checkHostHasActiveLogSources(hostID interface{}) bool {
+	// Check if the host has any remaining active log sources (excluding LogRhythm and echo sources)
+	url := fmt.Sprintf("https://%s:%d/lr-admin-api/logsources?hostId=%s&recordStatus=active", config.Hostname, config.Port, idToString(hostID))
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Printf("Error creating request to check host %s log sources: %v", idToString(hostID), err)
+		return true // Assume it has log sources if we can't check
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error checking log sources for host %s: %v", idToString(hostID), err)
+		return true // Assume it has log sources if we can't check
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Failed to check log sources for host %s, status: %d", idToString(hostID), resp.StatusCode)
+		return true // Assume it has log sources if we can't check
+	}
+
+	// Parse the response - try array format first
+	var allLogSources []LogSource
+	if err := json.NewDecoder(resp.Body).Decode(&allLogSources); err != nil {
+		// Try object format
+		var responseObj map[string]interface{}
+		resp.Body.Close()
+
+		req, err = http.NewRequest("GET", url, nil)
+		if err != nil {
+			return true
+		}
+		req.Header.Set("Authorization", "Bearer "+config.APIKey)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err = httpClient.Do(req)
+		if err != nil {
+			return true
+		}
+		defer resp.Body.Close()
+
+		if err := json.NewDecoder(resp.Body).Decode(&responseObj); err != nil {
+			return true
+		}
+
+		if items, ok := responseObj["items"].([]interface{}); ok {
+			// Convert items to LogSource structs
+			for _, item := range items {
+				if itemMap, ok := item.(map[string]interface{}); ok {
+					var ls LogSource
+					if lsBytes, err := json.Marshal(itemMap); err == nil {
+						if err := json.Unmarshal(lsBytes, &ls); err == nil {
+							allLogSources = append(allLogSources, ls)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Apply the same filtering logic as in analyzeHostsForRetirement
+	var filteredLogSources []LogSource
+	for _, ls := range allLogSources {
+		// Check if already retired
+		if ls.RecordStatus == "Retired" {
+			continue
+		}
+
+		// Check excluded sources
+		excluded := false
+		sourceType := ls.LogSourceType.Name
+		sourceName := ls.Name
+		hostName := ls.Host.Name
+
+		// Exclude LogRhythm system monitor agents
+		if strings.HasPrefix(sourceType, "LogRhythm") {
+			excluded = true
+		}
+
+		// Exclude echo hosts and log sources
+		if containsIgnoreCase(hostName, "echo") || containsIgnoreCase(sourceName, "echo") {
+			excluded = true
+		}
+
+		// Check config excluded sources
+		if !excluded {
+			for _, pattern := range config.ExcludedLogSources {
+				if containsIgnoreCase(sourceType, pattern) {
+					excluded = true
+					break
+				}
+			}
+		}
+
+		if !excluded {
+			filteredLogSources = append(filteredLogSources, ls)
+		}
+	}
+
+	hasActiveLogSources := len(filteredLogSources) > 0
+	log.Printf("Host %s has %d total log sources, %d filterable log sources (after excluding LogRhythm/echo)",
+		idToString(hostID), len(allLogSources), len(filteredLogSources))
+	return hasActiveLogSources
+}
+
+func unlicenseSystemMonitor(systemMonitorID interface{}) bool {
+	log.Printf("DEBUG: Starting unlicenseSystemMonitor for agent %s", idToString(systemMonitorID))
+	// First, GET the system monitor to get the complete object
+	getURL := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(systemMonitorID))
+	log.Printf("DEBUG: GET URL for agent %s: %s", idToString(systemMonitorID), getURL)
+
+	req, err := http.NewRequest("GET", getURL, nil)
+	if err != nil {
+		log.Printf("Error creating GET request for system monitor %s: %v", idToString(systemMonitorID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error getting system monitor %s: %v", idToString(systemMonitorID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Failed to get system monitor %s, status: %d", idToString(systemMonitorID), resp.StatusCode)
+		return false
+	}
+
+	// Parse the response
+	var systemMonitor map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&systemMonitor); err != nil {
+		log.Printf("Error decoding system monitor %s: %v", idToString(systemMonitorID), err)
+		return false
+	}
+
+	// Modify the system monitor object to unlicense it
+	// Set recordStatusName to "Unlicensed" (this is the LogRhythm way to unlicense)
+	log.Printf("DEBUG: Setting recordStatusName to 'Unlicensed' for agent %s", idToString(systemMonitorID))
+	systemMonitor["recordStatusName"] = "Unlicensed"
+
+	// PUT the updated system monitor back
+	putURL := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(systemMonitorID))
+	log.Printf("DEBUG: PUT URL for agent %s: %s", idToString(systemMonitorID), putURL)
+
+	jsonData, err := json.Marshal(systemMonitor)
+	if err != nil {
+		log.Printf("Error marshaling updated system monitor %s: %v", idToString(systemMonitorID), err)
+		return false
+	}
+	log.Printf("DEBUG: PUT payload for agent %s: %s", idToString(systemMonitorID), string(jsonData))
+
+	req, err = http.NewRequest("PUT", putURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Error creating PUT request for system monitor %s: %v", idToString(systemMonitorID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error unlicensing system monitor %s: %v", idToString(systemMonitorID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		log.Printf("Successfully unlicensed system monitor %s", idToString(systemMonitorID))
+		log.Printf("DEBUG: Agent %s unlicensing completed successfully", idToString(systemMonitorID))
+		return true
+	} else {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("Failed to unlicense system monitor %s, status: %d", idToString(systemMonitorID), resp.StatusCode)
+		log.Printf("DEBUG: Agent %s unlicensing failed with response: %s", idToString(systemMonitorID), string(bodyBytes))
+		return false
+	}
+}
+
+func retireSystemMonitor(systemMonitorID interface{}) bool {
+	log.Printf("DEBUG: Starting retireSystemMonitor for agent %s", idToString(systemMonitorID))
+	// First, GET the system monitor to get the complete object
+	getURL := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(systemMonitorID))
+	log.Printf("DEBUG: GET URL for agent %s: %s", idToString(systemMonitorID), getURL)
+
+	req, err := http.NewRequest("GET", getURL, nil)
+	if err != nil {
+		log.Printf("Error creating GET request for system monitor %s: %v", idToString(systemMonitorID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error getting system monitor %s: %v", idToString(systemMonitorID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Failed to get system monitor %s, status: %d", idToString(systemMonitorID), resp.StatusCode)
+		return false
+	}
+
+	// Parse the response
+	var systemMonitor map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&systemMonitor); err != nil {
+		log.Printf("Error decoding system monitor %s: %v", idToString(systemMonitorID), err)
+		return false
+	}
+
+	// Check if system monitor is already retired
+	if recordStatusName, ok := systemMonitor["recordStatusName"].(string); ok && recordStatusName == "Retired" {
+		log.Printf("System monitor %s is already retired, skipping retirement", idToString(systemMonitorID))
+		return true // Success - already retired
+	}
+
+	// Modify the system monitor object to retire it
+	// Set recordStatusName to "Retired" and licenseType to "None"
+	log.Printf("DEBUG: Setting recordStatusName to 'Retired' and licenseType to 'None' for agent %s", idToString(systemMonitorID))
+	systemMonitor["recordStatusName"] = "Retired"
+	systemMonitor["licenseType"] = "None"
+
+	// PUT the updated system monitor back
+	putURL := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(systemMonitorID))
+	log.Printf("DEBUG: PUT URL for agent %s: %s", idToString(systemMonitorID), putURL)
+
+	jsonData, err := json.Marshal(systemMonitor)
+	if err != nil {
+		log.Printf("Error marshaling updated system monitor %s: %v", idToString(systemMonitorID), err)
+		return false
+	}
+	log.Printf("DEBUG: PUT payload for agent %s: %s", idToString(systemMonitorID), string(jsonData))
+
+	req, err = http.NewRequest("PUT", putURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Error creating PUT request for system monitor %s: %v", idToString(systemMonitorID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error updating system monitor %s: %v", idToString(systemMonitorID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		log.Printf("Successfully retired system monitor %s", idToString(systemMonitorID))
+		log.Printf("DEBUG: Agent %s retirement completed successfully", idToString(systemMonitorID))
+		return true
+	} else {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("Failed to update system monitor %s, status: %d", idToString(systemMonitorID), resp.StatusCode)
+		log.Printf("DEBUG: Agent %s retirement failed with response: %s", idToString(systemMonitorID), string(bodyBytes))
+		return false
+	}
+}
+
+func removeHostIdentifiers(hostID interface{}) bool {
+	// First, GET the host to get all identifiers
+	getURL := fmt.Sprintf("https://%s:%d/lr-admin-api/hosts/%s", config.Hostname, config.Port, idToString(hostID))
+
+	req, err := http.NewRequest("GET", getURL, nil)
+	if err != nil {
+		log.Printf("Error creating GET request for host %s: %v", idToString(hostID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error getting host %s: %v", idToString(hostID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Failed to get host %s, status: %d", idToString(hostID), resp.StatusCode)
+		return false
+	}
+
+	// Parse the response to get identifiers
+	var host map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&host); err != nil {
+		log.Printf("Error decoding host %s: %v", idToString(hostID), err)
+		return false
+	}
+
+	// Check if host has identifiers (note: it's "hostIdentifiers" not "identifiers")
+	hostIdentifiers, hasIdentifiers := host["hostIdentifiers"]
+	if !hasIdentifiers {
+		log.Printf("Host %s has no identifiers to remove", idToString(hostID))
+		return true // Success - no identifiers to remove
+	}
+
+	identifiersArray, ok := hostIdentifiers.([]interface{})
+	if !ok || len(identifiersArray) == 0 {
+		log.Printf("Host %s has no identifiers to remove", idToString(hostID))
+		return true // Success - no identifiers to remove
+	}
+
+	// Find IPAddress identifiers to remove (skip those already retired)
+	var ipAddressIdentifiers []map[string]interface{}
+	for _, identifier := range identifiersArray {
+		identifierMap, ok := identifier.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		identifierType, hasType := identifierMap["type"]
+		if !hasType {
+			continue
+		}
+
+		// Only remove IPAddress identifiers
+		if identifierType == "IPAddress" {
+			// Skip IP addresses that already have a dateRetired (already retired)
+			if dateRetired, hasDateRetired := identifierMap["dateRetired"]; hasDateRetired && dateRetired != nil {
+				log.Printf("Skipping IP address %v (already retired on %v)", identifierMap["value"], dateRetired)
+				continue
+			}
+			ipAddressIdentifiers = append(ipAddressIdentifiers, identifierMap)
+		}
+	}
+
+	if len(ipAddressIdentifiers) == 0 {
+		log.Printf("Host %s has no IPAddress identifiers to remove", idToString(hostID))
+		return true // Success - no IPAddress identifiers to remove
+	}
+
+	log.Printf("Host %s has %d IPAddress identifiers to remove", idToString(hostID), len(ipAddressIdentifiers))
+
+	// Create payload for removing IPAddress identifiers with their actual IP address values
+	var hostIdentifiersPayload []map[string]interface{}
+	for _, identifier := range ipAddressIdentifiers {
+		ipAddress, hasValue := identifier["value"]
+		if hasValue {
+			hostIdentifiersPayload = append(hostIdentifiersPayload, map[string]interface{}{
+				"type":  "IPAddress",
+				"value": ipAddress, // Use the actual IP address value, not the hostIdentifierId
+			})
+		}
+	}
+
+	payload := map[string]interface{}{
+		"hostIdentifiers": hostIdentifiersPayload,
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("Error marshaling identifier removal payload for host %s: %v", idToString(hostID), err)
+		return false
+	}
+
+	// DELETE the IPAddress identifiers
+	deleteURL := fmt.Sprintf("https://%s:%d/lr-admin-api/hosts/%s/identifiers",
+		config.Hostname, config.Port, idToString(hostID))
+
+	log.Printf("DELETE URL: %s", deleteURL)
+	log.Printf("DELETE Payload: %s", string(jsonData))
+
+	req, err = http.NewRequest("DELETE", deleteURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Error creating DELETE request for host identifiers %s: %v", idToString(hostID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error removing IPAddress identifiers from host %s: %v", idToString(hostID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	// Read response body for debugging
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	log.Printf("DELETE Response Status: %d", resp.StatusCode)
+	log.Printf("DELETE Response Body: %s", string(bodyBytes))
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		log.Printf("Successfully removed %d IPAddress identifiers from host %s", len(ipAddressIdentifiers), idToString(hostID))
+		return true
+	} else {
+		log.Printf("Failed to remove IPAddress identifiers from host %s, status: %d", idToString(hostID), resp.StatusCode)
+		return false
+	}
+}
+
+func updateHost(hostID interface{}) bool {
+	// First, remove all identifiers from the host
+	if !removeHostIdentifiers(hostID) {
+		log.Printf("Failed to remove identifiers from host %s, skipping host retirement", idToString(hostID))
+		return false
+	}
+
+	// Use the correct LogRhythm API for retiring hosts
+	// Based on the example, we need to use the specific host endpoint
+	hostURL := fmt.Sprintf("https://%s:%d/lr-admin-api/hosts/%s", config.Hostname, config.Port, idToString(hostID))
+
+	// GET the host first to get the complete object
+	getReq, err := http.NewRequest("GET", hostURL, nil)
+	if err != nil {
+		log.Printf("Error creating GET request for host %s: %v", idToString(hostID), err)
+		return false
+	}
+
+	getReq.Header.Set("Authorization", "Bearer "+config.APIKey)
+	getReq.Header.Set("Content-Type", "application/json")
+
+	getResp, err := httpClient.Do(getReq)
+	if err != nil {
+		log.Printf("Error getting host %s: %v", idToString(hostID), err)
+		return false
+	}
+	defer getResp.Body.Close()
+
+	if getResp.StatusCode != http.StatusOK {
+		log.Printf("Failed to get host %s, status: %d", idToString(hostID), getResp.StatusCode)
+		return false
+	}
+
+	// Parse the response
+	var host map[string]interface{}
+	if err := json.NewDecoder(getResp.Body).Decode(&host); err != nil {
+		log.Printf("Error decoding host %s: %v", idToString(hostID), err)
+		return false
+	}
+
+	// Check if host is already retired
+	if recordStatusName, ok := host["recordStatusName"].(string); ok && recordStatusName == "Retired" {
+		log.Printf("Host %s is already retired, skipping retirement", idToString(hostID))
+		return true // Success - already retired
+	}
+
+	// Update the recordStatusName to "Retired"
+	host["recordStatusName"] = "Retired"
+
+	// Also update the name to indicate retirement
+	if name, ok := host["name"].(string); ok {
+		// Check if already retired to prevent duplicate "Retired by LRCleaner" additions
+		if !strings.Contains(name, "Retired by LRCleaner") {
+			host["name"] = name + " Retired by LRCleaner"
+		}
+	}
+
+	// Remove fields that are not allowed in PUT request
+	delete(host, "hostRoles")
+	delete(host, "hostIdentifiers")
+
+	// PUT the updated host back
+	jsonData, err := json.Marshal(host)
+	if err != nil {
+		log.Printf("Error marshaling updated host %s: %v", idToString(hostID), err)
+		return false
+	}
+
+	log.Printf("PUT Request Data for host %s: %s", idToString(hostID), string(jsonData))
+
+	req, err := http.NewRequest("PUT", hostURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Error creating PUT request for host %s: %v", idToString(hostID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error updating host %s: %v", idToString(hostID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	// Read response body for debugging
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	log.Printf("PUT Response Status: %d", resp.StatusCode)
+	log.Printf("PUT Response Body: %s", string(bodyBytes))
+
+	if resp.StatusCode == http.StatusOK {
+		log.Printf("Successfully retired host %s", idToString(hostID))
+		return true
+	} else {
+		log.Printf("Failed to update host %s, status: %d", idToString(hostID), resp.StatusCode)
+		return false
+	}
+}
+
+func updateLogSource(logSourceID interface{}) bool {
+	// First, GET the log source to get the complete object
+	getURL := fmt.Sprintf("https://%s:%d/lr-admin-api/logsources/%s", config.Hostname, config.Port, idToString(logSourceID))
+
+	req, err := http.NewRequest("GET", getURL, nil)
+	if err != nil {
+		log.Printf("Error creating GET request for log source %s: %v", idToString(logSourceID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error getting log source %s: %v", idToString(logSourceID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Failed to get log source %s, status: %d", idToString(logSourceID), resp.StatusCode)
+		return false
+	}
+
+	// Parse the response
+	var logSource map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&logSource); err != nil {
+		log.Printf("Error decoding log source %s: %v", idToString(logSourceID), err)
+		return false
+	}
+
+	// Modify the log source object
+	if name, ok := logSource["name"].(string); ok {
+		// Check if already retired to prevent duplicate "Retired by LRCleaner" additions
+		if !strings.Contains(name, "Retired by LRCleaner") {
+			logSource["name"] = name + " Retired by LRCleaner"
+		}
+	}
+
+	// Only set status to Retired if not already retired
+	if recordStatus, ok := logSource["recordStatus"].(string); ok {
+		if recordStatus != "Retired" {
+			logSource["recordStatus"] = "Retired"
+		}
+	} else {
+		logSource["recordStatus"] = "Retired"
+	}
+
+	// PUT the updated log source back
+	putURL := fmt.Sprintf("https://%s:%d/lr-admin-api/logsources/%s", config.Hostname, config.Port, idToString(logSourceID))
+
+	jsonData, err := json.Marshal(logSource)
+	if err != nil {
+		log.Printf("Error marshaling updated log source %s: %v", idToString(logSourceID), err)
+		return false
+	}
+
+	req, err = http.NewRequest("PUT", putURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Error creating PUT request for log source %s: %v", idToString(logSourceID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error updating log source %s: %v", idToString(logSourceID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		log.Printf("Successfully retired log source %s", idToString(logSourceID))
+		return true
+	} else {
+		log.Printf("Failed to update log source %s, status: %d", idToString(logSourceID), resp.StatusCode)
+		return false
+	}
+}
+
+func generateTextReport(job *JobStatus) []byte {
+	// Generate a simple text-based report
+
+	report := "LRCleaner Retirement Report\n"
+	report += "==========================\n\n"
+	report += fmt.Sprintf("Job ID: %s\n", job.ID)
+	report += fmt.Sprintf("Completed: %s\n", job.EndTime.Format("2006-01-02 15:04:05"))
+	report += fmt.Sprintf("Total Log Sources Retired: %d\n\n", len(job.RetirementRecords))
+	report += "Retirement Summary:\n"
+	report += "==================\n\n"
+
+	// Group by host
+	hostMap := make(map[string][]RetirementRecord)
+	for _, record := range job.RetirementRecords {
+		hostMap[record.HostName] = append(hostMap[record.HostName], record)
+	}
+
+	for hostName, records := range hostMap {
+		report += fmt.Sprintf("Host: %s (%d log sources)\n", hostName, len(records))
+		report += "----------------------------------------\n"
+
+		for _, record := range records {
+			report += fmt.Sprintf("  Log Source ID: %s\n", idToString(record.LogSourceID))
+			report += fmt.Sprintf("  Original Name: %s\n", record.OriginalName)
+			report += fmt.Sprintf("  Retired Name: %s\n", record.RetiredName)
+			report += fmt.Sprintf("  Status: %s -> %s\n", record.OriginalStatus, record.RetiredStatus)
+			report += fmt.Sprintf("  Timestamp: %s\n\n", record.Timestamp.Format("2006-01-02 15:04:05"))
+		}
+		report += "\n"
+	}
+
+	report += "Backup Recommendation:\n"
+	report += "=====================\n"
+	report += "Before making any changes, it is recommended to backup the LogRhythmEMDB database:\n\n"
+	report += "1. Stop LogRhythm services\n"
+	report += "2. Backup the LogRhythmEMDB database\n"
+	report += "3. Document the backup location and timestamp\n"
+	report += "4. Restart LogRhythm services\n\n"
+	report += "This backup will allow you to restore the system to its previous state if needed.\n\n"
+	report += fmt.Sprintf("Generated by LRCleaner on %s\n", time.Now().Format("2006-01-02 15:04:05"))
+
+	return []byte(report)
+}
