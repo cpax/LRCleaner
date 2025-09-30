@@ -17,7 +17,7 @@ if errorlevel 1 (
 )
 
 REM Build directory
-set BUILD_DIR=dist
+set BUILD_DIR=..\dist
 set VERSION=%date:~-4,4%%date:~-10,2%%date:~-7,2%_%time:~0,2%%time:~3,2%%time:~6,2%
 set VERSION=%VERSION: =0%
 
@@ -40,7 +40,7 @@ REM Build for Windows
 echo Building for Windows (amd64)...
 set GOOS=windows
 set GOARCH=amd64
-go build -ldflags="-s -w" -o ..\%BUILD_DIR%\LRCleaner.exe .
+go build -ldflags="-s -w" -o %BUILD_DIR%\Windows\LRCleaner_amd64.exe .
 cd ..
 if errorlevel 1 (
     echo Build failed
@@ -51,8 +51,8 @@ if errorlevel 1 (
 REM Create Windows package
 echo Creating Windows package...
 mkdir %BUILD_DIR%\windows
-copy %BUILD_DIR%\LRCleaner.exe %BUILD_DIR%\windows\
-copy ..\docs\README.md %BUILD_DIR%\windows\
+copy %BUILD_DIR%\Windows\LRCleaner_amd64.exe %BUILD_DIR%\windows\LRCleaner.exe
+copy ..\README.md %BUILD_DIR%\windows\
 
 REM Create ZIP file (requires PowerShell)
 powershell -command "Compress-Archive -Path '%BUILD_DIR%\windows\*' -DestinationPath '%BUILD_DIR%\LRCleaner_Windows_%VERSION%.zip' -Force"
@@ -61,10 +61,10 @@ REM Show file size
 echo.
 echo Build completed successfully!
 echo File size:
-dir %BUILD_DIR%\LRCleaner.exe | findstr LRCleaner.exe
+dir %BUILD_DIR%\Windows\LRCleaner_amd64.exe | findstr LRCleaner_amd64.exe
 
 echo.
-echo Executable created: %BUILD_DIR%\LRCleaner.exe
+echo Executable created: %BUILD_DIR%\Windows\LRCleaner_amd64.exe
 echo Package created: %BUILD_DIR%\LRCleaner_Windows_%VERSION%.zip
 echo.
 pause

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,6 +30,9 @@ import (
 	"github.com/gorilla/websocket"
 	_ "github.com/microsoft/go-mssqldb"
 )
+
+//go:embed web/*
+var webFiles embed.FS
 
 // Configuration structure
 type Config struct {
@@ -324,7 +328,7 @@ func findAvailablePort() int {
 	// If 8080 is not available, find an available port starting from 8000
 	fmt.Println("Port 8080 is in use, searching for available port...")
 
-	for port := 8000; port <= 8500; port++ {
+	for port := 8000; port <= 8443; port++ {
 		if isPortAvailable(port) {
 			fmt.Printf("Found available port: %d\n", port)
 			return port
@@ -430,11 +434,11 @@ func loadRollbackFiles() {
 }
 
 func main() {
-	// Find available port
-	port := findAvailablePort()
-
 	// Initialize configuration
 	config = loadConfig()
+
+	// Find available port (tries 8080 first, then 8000-8443)
+	port := findAvailablePort()
 
 	// Load existing rollback files
 	loadRollbackFiles()
@@ -451,7 +455,24 @@ func main() {
 	router := mux.NewRouter()
 
 	// Static files (embedded web UI)
-	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./web/static/"))))
+	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Serve static files from embedded filesystem
+		path := "web/static/" + r.URL.Path
+		data, err := webFiles.ReadFile(path)
+		if err != nil {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+
+		// Set appropriate content type based on file extension
+		if strings.HasSuffix(path, ".css") {
+			w.Header().Set("Content-Type", "text/css")
+		} else if strings.HasSuffix(path, ".js") {
+			w.Header().Set("Content-Type", "application/javascript")
+		}
+
+		w.Write(data)
+	})))
 	router.HandleFunc("/", serveIndex)
 
 	// API routes
@@ -594,7 +615,14 @@ func loadConfig() *Config {
 }
 
 func serveIndex(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "./web/index.html")
+	// Serve the main page from embedded files - the frontend JavaScript will handle routing based on config
+	data, err := webFiles.ReadFile("web/index.html")
+	if err != nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html")
+	w.Write(data)
 }
 
 // ConfigResponse represents the response structure for config API
