@@ -1213,13 +1213,17 @@ function updateJobProgress(job) {
     console.log('Job ID from message:', job.id);
     if (job.id === currentJobId) {
         console.log('Job ID matches current job ID:', currentJobId);
-        // Update progress bar
+        // Update progress bar (progress section removed, but keep logging for debugging)
         const progressFill = document.getElementById('progressFill');
         const progressText = document.getElementById('progressText');
         const jobStatus = document.getElementById('jobStatus');
         
-        progressFill.style.width = `${job.progress}%`;
-        progressText.textContent = job.message;
+        if (progressFill) {
+            progressFill.style.width = `${job.progress}%`;
+        }
+        if (progressText) {
+            progressText.textContent = job.message;
+        }
         
         if (job.results) {
             console.log('Job has results:', job.results.length, 'items');
@@ -1261,10 +1265,14 @@ function updateJobProgress(job) {
         }
         
         if (job.status === 'completed') {
-            jobStatus.textContent = `Completed at ${new Date(job.endTime).toLocaleString()}`;
+            if (jobStatus) {
+                jobStatus.textContent = `Completed at ${new Date(job.endTime).toLocaleString()}`;
+            }
             document.getElementById('exportBtn').disabled = false;
         } else if (job.status === 'error') {
-            jobStatus.textContent = `Error: ${job.error}`;
+            if (jobStatus) {
+                jobStatus.textContent = `Error: ${job.error}`;
+            }
             showToast(`Analysis failed: ${job.error}`, 'error');
         }
     }
@@ -1497,11 +1505,13 @@ function clearFilters() {
 }
 
 function showProgressSection() {
-    document.getElementById('progressSection').style.display = 'block';
+    // Progress section removed - no longer needed
+    console.log('Progress section display requested (section removed)');
 }
 
 function hideProgressSection() {
-    document.getElementById('progressSection').style.display = 'none';
+    // Progress section removed - no longer needed
+    console.log('Progress section hide requested (section removed)');
 }
 
 function showLoadingOverlay() {

@@ -1548,7 +1548,15 @@ tr:hover {
 
 /* Rollback Styles */
 .rollback-section {
-    padding: 20px;
+    padding: 0;
+    width: 100%;
+    display: block;
+    box-sizing: border-box;
+}
+
+.rollback-section .card {
+    width: 100%;
+    margin: 0;
 }
 
 .rollback-info {

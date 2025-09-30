@@ -3042,8 +3042,18 @@ func rollbackHost(change HostRollback) bool {
 		host["hostIdentifiers"] = identifiers
 	}
 
-	// Remove fields that are not allowed in PUT request
+	// Remove fields that are not allowed in PUT request or might cause validation issues
 	delete(host, "hostRoles")
+	delete(host, "id")
+	delete(host, "createdDate")
+	delete(host, "lastUpdatedDate")
+	delete(host, "lastUpdatedBy")
+	delete(host, "createdBy")
+	delete(host, "recordStatus")
+
+	// Ensure we have the required fields with correct values
+	host["name"] = change.OriginalName
+	host["recordStatusName"] = change.OriginalStatus
 
 	// PUT the updated host back
 	jsonData, err := json.Marshal(host)
@@ -3051,6 +3061,9 @@ func rollbackHost(change HostRollback) bool {
 		log.Printf("Error marshaling updated host %s: %v", idToString(change.HostID), err)
 		return false
 	}
+
+	// Log the data being sent for debugging
+	log.Printf("Rolling back host %s with data: %s", idToString(change.HostID), string(jsonData))
 
 	req, err = http.NewRequest("PUT", url, bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -3072,7 +3085,13 @@ func rollbackHost(change HostRollback) bool {
 		log.Printf("Successfully rolled back host %s", idToString(change.HostID))
 		return true
 	} else {
-		log.Printf("Failed to rollback host %s, status: %d", idToString(change.HostID), resp.StatusCode)
+		// Read the response body to get more details about the error
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			log.Printf("Failed to rollback host %s, status: %d (could not read response body)", idToString(change.HostID), resp.StatusCode)
+		} else {
+			log.Printf("Failed to rollback host %s, status: %d, response: %s", idToString(change.HostID), resp.StatusCode, string(body))
+		}
 		return false
 	}
 }
