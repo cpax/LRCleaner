@@ -1,10 +1,16 @@
-# Configuration files with sensitive data
+# Configuration files with sensitive data (customer systems only)
 config.json
 
 # Build artifacts
 dist/
+build/cross-platform/
 *.exe
 *.exe~
+
+# Runtime data (customer systems only)
+rollback/
+exports/
+logs/
 
 # OS generated files
 .DS_Store
