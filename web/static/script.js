@@ -287,7 +287,23 @@ function setupEventListeners() {
     if (applyBtn) applyBtn.addEventListener('click', handleApply);
     
     const exportBtn = document.getElementById('exportBtn');
-    if (exportBtn) exportBtn.addEventListener('click', handleExport);
+    console.log('Export button found:', exportBtn);
+    if (exportBtn) {
+        exportBtn.addEventListener('click', function(e) {
+            console.log('Export button clicked');
+            console.log('Button disabled state:', e.target.disabled);
+            console.log('Current job ID:', currentJobId);
+            if (!e.target.disabled) {
+                handleExport();
+            } else {
+                console.log('Export button is disabled');
+                showToast('Please run an analysis first to enable export', 'warning');
+            }
+        });
+        console.log('Export button event listener added');
+    } else {
+        console.log('Export button not found!');
+    }
     
     const clearBtn = document.getElementById('clearBtn');
     if (clearBtn) clearBtn.addEventListener('click', clearResults);
@@ -819,11 +835,16 @@ function handleApply() {
 }
 
 function handleExport() {
+    console.log('handleExport called');
+    console.log('currentJobId:', currentJobId);
+    
     if (!currentJobId) {
+        console.log('No currentJobId, showing warning');
         showToast('No results to export', 'warning');
         return;
     }
     
+    console.log('Creating download link for job:', currentJobId);
     const link = document.createElement('a');
     link.href = `/api/export/${currentJobId}`;
     link.download = `lrcleaner_results_${currentJobId}.csv`;
