@@ -16,7 +16,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Build directory
-BUILD_DIR="dist"
+BUILD_DIR="../dist"
 VERSION=$(date +"%Y%m%d_%H%M%S")
 
 # Clean previous builds
@@ -26,7 +26,7 @@ mkdir -p $BUILD_DIR
 
 # Download dependencies
 echo -e "${YELLOW}Downloading dependencies...${NC}"
-cd src
+cd ../src
 go mod tidy
 
 # Build for different platforms
@@ -34,55 +34,53 @@ echo -e "${YELLOW}Building for multiple platforms...${NC}"
 
 # Windows (amd64)
 echo -e "${BLUE}Building for Windows (amd64)...${NC}"
-GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o ../$BUILD_DIR/LRCleaner_Windows_amd64.exe .
+GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o $BUILD_DIR/Windows/LRCleaner_amd64.exe .
 
 # Windows (arm64)
 echo -e "${BLUE}Building for Windows (arm64)...${NC}"
-GOOS=windows GOARCH=arm64 go build -ldflags="-s -w" -o ../$BUILD_DIR/LRCleaner_Windows_arm64.exe .
+GOOS=windows GOARCH=arm64 go build -ldflags="-s -w" -o $BUILD_DIR/Windows/LRCleaner_arm64.exe .
 
 # macOS (amd64)
 echo -e "${BLUE}Building for macOS (amd64)...${NC}"
-GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o ../$BUILD_DIR/LRCleaner_macOS_amd64 .
+GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o $BUILD_DIR/macOS/LRCleaner_amd64 .
 
 # macOS (arm64 - Apple Silicon)
 echo -e "${BLUE}Building for macOS (arm64)...${NC}"
-GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o ../$BUILD_DIR/LRCleaner_macOS_arm64 .
+GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o $BUILD_DIR/macOS/LRCleaner_arm64 .
 
 # Linux (amd64)
 echo -e "${BLUE}Building for Linux (amd64)...${NC}"
-GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../$BUILD_DIR/LRCleaner_Linux_amd64 .
+GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o $BUILD_DIR/GNU\ Linux/LRCleaner_amd64 .
 
 # Linux (arm64)
 echo -e "${BLUE}Building for Linux (arm64)...${NC}"
-GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o ../$BUILD_DIR/LRCleaner_Linux_arm64 .
-
-cd ..
+GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o $BUILD_DIR/GNU\ Linux/LRCleaner_arm64 .
 
 # Create release packages
 echo -e "${YELLOW}Creating release packages...${NC}"
 
 # Windows package
 mkdir -p $BUILD_DIR/windows
-cp $BUILD_DIR/LRCleaner_Windows_amd64.exe $BUILD_DIR/windows/LRCleaner.exe
-cp ../docs/README.md $BUILD_DIR/windows/
+cp $BUILD_DIR/Windows/LRCleaner_amd64.exe $BUILD_DIR/windows/LRCleaner.exe
+cp ../README.md $BUILD_DIR/windows/
 cd $BUILD_DIR/windows
 zip -r ../LRCleaner_Windows_$VERSION.zip .
 cd ../..
 
 # macOS package
 mkdir -p $BUILD_DIR/macos
-cp $BUILD_DIR/LRCleaner_macOS_amd64 $BUILD_DIR/macos/LRCleaner
-cp $BUILD_DIR/LRCleaner_macOS_arm64 $BUILD_DIR/macos/LRCleaner_arm64
-cp ../docs/README.md $BUILD_DIR/macos/
+cp $BUILD_DIR/macOS/LRCleaner_amd64 $BUILD_DIR/macos/LRCleaner
+cp $BUILD_DIR/macOS/LRCleaner_arm64 $BUILD_DIR/macos/LRCleaner_arm64
+cp ../README.md $BUILD_DIR/macos/
 cd $BUILD_DIR/macos
 tar -czf ../LRCleaner_macOS_$VERSION.tar.gz .
 cd ../..
 
 # Linux package
 mkdir -p $BUILD_DIR/linux
-cp $BUILD_DIR/LRCleaner_Linux_amd64 $BUILD_DIR/linux/LRCleaner
-cp $BUILD_DIR/LRCleaner_Linux_arm64 $BUILD_DIR/linux/LRCleaner_arm64
-cp ../docs/README.md $BUILD_DIR/linux/
+cp "$BUILD_DIR/GNU Linux/LRCleaner_amd64" $BUILD_DIR/linux/LRCleaner
+cp "$BUILD_DIR/GNU Linux/LRCleaner_arm64" $BUILD_DIR/linux/LRCleaner_arm64
+cp ../README.md $BUILD_DIR/linux/
 cd $BUILD_DIR/linux
 tar -czf ../LRCleaner_Linux_$VERSION.tar.gz .
 cd ../..
@@ -90,7 +88,12 @@ cd ../..
 # Show file sizes
 echo -e "${GREEN}Build completed successfully!${NC}"
 echo -e "${YELLOW}File sizes:${NC}"
-ls -lh $BUILD_DIR/*.exe $BUILD_DIR/*_amd64 $BUILD_DIR/*_arm64 2>/dev/null | awk '{print $5, $9}'
+echo -e "${BLUE}Windows:${NC}"
+ls -lh $BUILD_DIR/Windows/*.exe 2>/dev/null | awk '{print $5, $9}'
+echo -e "${BLUE}macOS:${NC}"
+ls -lh $BUILD_DIR/macOS/* 2>/dev/null | awk '{print $5, $9}'
+echo -e "${BLUE}GNU Linux:${NC}"
+ls -lh "$BUILD_DIR/GNU Linux"/* 2>/dev/null | awk '{print $5, $9}'
 
 echo -e "${YELLOW}Release packages:${NC}"
 ls -lh $BUILD_DIR/*.zip $BUILD_DIR/*.tar.gz 2>/dev/null | awk '{print $5, $9}'

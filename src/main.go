@@ -33,6 +33,7 @@ import (
 )
 
 // Embedded web files
+//
 //go:embed web/*
 var webFiles embed.FS
 
@@ -330,7 +331,7 @@ func findAvailablePort() int {
 	// If 8080 is not available, find an available port starting from 8000
 	fmt.Println("Port 8080 is in use, searching for available port...")
 
-	for port := 8000; port <= 8500; port++ {
+	for port := 8000; port <= 8443; port++ {
 		if isPortAvailable(port) {
 			fmt.Printf("Found available port: %d\n", port)
 			return port
@@ -436,11 +437,11 @@ func loadRollbackFiles() {
 }
 
 func main() {
-	// Find available port
-	port := findAvailablePort()
-
 	// Initialize configuration
 	config = loadConfig()
+
+	// Find available port (tries 8080 first, then 8000-8443)
+	port := findAvailablePort()
 
 	// Load existing rollback files
 	loadRollbackFiles()
