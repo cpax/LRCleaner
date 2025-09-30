@@ -5,6 +5,7 @@ let hostGroups = {};
 let allResults = [];
 let hostAnalysis = [];
 let selectedHosts = [];
+let selectedLogSources = [];
 let retirementRecords = [];
 let collectionHostAnalysis = [];
 let selectedCollectionHosts = [];
@@ -107,15 +108,34 @@ function showSettingsSection() {
     // Hide analysis section and show settings section
     const settingsSection = document.getElementById('settingsSection');
     const analysisSection = document.getElementById('analysisSection');
+    const rollbackSection = document.getElementById('rollbackSection');
     const controlSection = document.querySelector('.control-section');
     const resultsSection = document.querySelector('.results-section');
     
     if (analysisSection) analysisSection.style.display = 'none';
+    if (rollbackSection) rollbackSection.style.display = 'none';
     if (controlSection) controlSection.style.display = 'none';
     if (resultsSection) resultsSection.style.display = 'none';
     if (settingsSection) settingsSection.style.display = 'block';
     
     console.log('Showing settings section');
+}
+
+function showRollbackSection() {
+    // Hide other sections and show rollback section
+    const settingsSection = document.getElementById('settingsSection');
+    const analysisSection = document.getElementById('analysisSection');
+    const rollbackSection = document.getElementById('rollbackSection');
+    const controlSection = document.querySelector('.control-section');
+    const resultsSection = document.querySelector('.results-section');
+    
+    if (analysisSection) analysisSection.style.display = 'none';
+    if (settingsSection) settingsSection.style.display = 'none';
+    if (controlSection) controlSection.style.display = 'none';
+    if (resultsSection) resultsSection.style.display = 'none';
+    if (rollbackSection) rollbackSection.style.display = 'block';
+    
+    console.log('Showing rollback section');
 }
 
 function handleExport() {
@@ -131,9 +151,10 @@ function handleRetirement() {
 }
 
 function handleRollback() {
-    // TODO: Implement rollback functionality
-    console.log('Rollback functionality not yet implemented');
-    alert('Rollback functionality will be implemented soon!');
+    // Show rollback section
+    showRollbackSection();
+    // Load rollback history
+    loadRollbackHistory();
 }
 
 function handleBackupAcknowledge() {
@@ -302,14 +323,14 @@ function setupEventListeners() {
     if (backToBackupBtn) backToBackupBtn.addEventListener('click', backToBackupModal);
     
     // Host selection modal
-    const selectAllHosts = document.getElementById('selectAllHosts');
-    if (selectAllHosts) selectAllHosts.addEventListener('change', handleSelectAllRecommended);
+    const selectVisibleBtn = document.getElementById('selectVisibleBtn');
+    if (selectVisibleBtn) selectVisibleBtn.addEventListener('click', selectVisibleHosts);
     
-    const selectAllBtn = document.getElementById('selectAllBtn');
-    if (selectAllBtn) selectAllBtn.addEventListener('click', selectAllHosts);
+    const selectAllHostsBtn = document.getElementById('selectAllHostsBtn');
+    if (selectAllHostsBtn) selectAllHostsBtn.addEventListener('click', selectAllHosts);
     
-    const deselectAllBtn = document.getElementById('deselectAllBtn');
-    if (deselectAllBtn) deselectAllBtn.addEventListener('click', deselectAllHosts);
+    const deselectAllHostsBtn = document.getElementById('deselectAllHostsBtn');
+    if (deselectAllHostsBtn) deselectAllHostsBtn.addEventListener('click', deselectAllHosts);
     
     const executeRetirementBtn = document.getElementById('executeRetirementBtn');
     if (executeRetirementBtn) executeRetirementBtn.addEventListener('click', executeRetirement);
@@ -453,6 +474,17 @@ function setupEventListeners() {
     
     const clearFiltersBtn = document.getElementById('clearFiltersBtn');
     if (clearFiltersBtn) clearFiltersBtn.addEventListener('click', clearFilters);
+    
+    // Rollback controls
+    const refreshRollbackBtn = document.getElementById('refreshRollbackBtn');
+    if (refreshRollbackBtn) refreshRollbackBtn.addEventListener('click', loadRollbackHistory);
+    
+    const cleanupRollbackBtn = document.getElementById('cleanupRollbackBtn');
+    if (cleanupRollbackBtn) cleanupRollbackBtn.addEventListener('click', cleanupRollbackHistory);
+    
+    // Rollback configuration form
+    const rollbackConfigForm = document.getElementById('rollbackConfigForm');
+    if (rollbackConfigForm) rollbackConfigForm.addEventListener('submit', handleRollbackConfigSubmit);
 }
 
 function loadConfiguration() {
@@ -1535,8 +1567,18 @@ function executeBackup() {
 // Host Selection Functions
 function showHostSelectionControls() {
     // Show the host selection controls in the results section
-    document.getElementById('hostSelectionControls').style.display = 'block';
-    updateHostSummary();
+    const controls = document.getElementById('hostSelectionControls');
+    controls.style.display = 'block';
+    
+    // Wait for the DOM to update before trying to access the element
+    setTimeout(() => {
+        const summary = document.getElementById('hostSummaryResults');
+        if (summary) {
+            updateHostSummary();
+        } else {
+            console.error('hostSummaryResults element not found after showing controls');
+        }
+    }, 50);
 }
 
 function hideHostSelectionControls() {
@@ -1632,6 +1674,7 @@ function updateResultsTableForApplyMode() {
         detailsTable.innerHTML = `
             <thead>
                 <tr>
+                    <th style="width: 40px;">Select</th>
                     <th>Log Source ID</th>
                     <th>Log Source Name</th>
                     <th>Log Source Type</th>
@@ -1642,10 +1685,19 @@ function updateResultsTableForApplyMode() {
             <tbody>
                 ${host.logSources.map(source => `
                     <tr>
+                        <td class="log-source-checkbox-cell">
+                            <label class="checkbox-label">
+                                <input type="checkbox" 
+                                       onchange="updateLogSourceSelection('${source.id}', this.checked)">
+                                <span class="checkmark"></span>
+                            </label>
+                        </td>
                         <td class="log-source-id">${source.id}</td>
                         <td class="log-source-name">${source.name || 'N/A'}</td>
                         <td class="log-source-type">${source.logSourceType?.name || source.logSourceType || 'N/A'}</td>
-                        <td class="last-log-date">${formatDate(source.maxLogDate)}</td>
+                        <td class="last-log-date">${source.maxLogDate === '1899-12-31T17:00:00Z' || source.maxLogDate === '1899-12-31T17:00:00.000Z' ? 
+                            '<span style="color: #ff6b6b; font-weight: bold;">NEVER RECEIVED LOGS</span>' : 
+                            formatDate(source.maxLogDate)}</td>
                         <td class="ping-result ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</td>
                     </tr>
                 `).join('')}
@@ -1792,8 +1844,49 @@ function updateHostSelection(hostId, selected) {
     updateHostSummary();
 }
 
+function updateLogSourceSelection(logSourceId, selected) {
+    console.log('updateLogSourceSelection called with:', logSourceId, selected);
+    
+    if (selected) {
+        if (!selectedLogSources.includes(logSourceId)) {
+            selectedLogSources.push(logSourceId);
+        }
+    } else {
+        selectedLogSources = selectedLogSources.filter(id => id !== logSourceId);
+    }
+    
+    console.log('Updated selectedLogSources:', selectedLogSources);
+    
+    // Update execute button state
+    const executeBtn = document.getElementById('executeRetirementBtn');
+    if (executeBtn) {
+        executeBtn.disabled = (selectedHosts.length === 0 && selectedLogSources.length === 0);
+    }
+    
+    // Update host summary
+    updateHostSummary();
+}
+
 function updateHostSummary() {
-    const summary = document.getElementById('hostSummary');
+    const summary = document.getElementById('hostSummaryResults');
+    
+    // Debug logging
+    console.log('updateHostSummary called');
+    console.log('hostAnalysis length:', hostAnalysis.length);
+    console.log('selectedHosts length:', selectedHosts.length);
+    console.log('hostAnalysis data:', hostAnalysis);
+    console.log('Summary element found:', !!summary);
+    
+    if (!summary) {
+        console.error('hostSummaryResults element not found - element may not be in DOM yet');
+        return;
+    }
+    
+    if (!hostAnalysis || hostAnalysis.length === 0) {
+        summary.innerHTML = '<strong>Summary:</strong> No host analysis data available';
+        return;
+    }
+    
     const totalHosts = hostAnalysis.length;
     const recommendedHosts = hostAnalysis.filter(h => h.recommended).length;
     const totalLogSources = selectedHosts.reduce((total, hostId) => {
@@ -1804,61 +1897,157 @@ function updateHostSummary() {
     summary.innerHTML = `
         <strong>Summary:</strong> ${totalHosts} total hosts | 
         ${recommendedHosts} recommended | 
-        ${selectedHosts.length} selected | 
-        ${totalLogSources} log sources will be retired
+        ${selectedHosts.length} hosts selected | 
+        ${selectedLogSources.length} log sources selected | 
+        ${totalLogSources + selectedLogSources.length} total items will be retired
     `;
 }
 
-function handleSelectAllRecommended() {
-    const selectAll = document.getElementById('selectAllHosts').checked;
-    const recommendedHosts = hostAnalysis.filter(h => h.recommended);
+function selectVisibleHosts() {
+    console.log('selectVisibleHosts called');
+    // Get all currently visible host rows (not hidden by filters)
+    const visibleHostRows = document.querySelectorAll('.host-summary-row:not([style*="display: none"])');
+    console.log('Found visible host rows:', visibleHostRows.length);
     
-    recommendedHosts.forEach(host => {
-        const checkbox = document.querySelector(`[data-host-id="${host.hostId}"]`);
-        if (checkbox) {
-            checkbox.checked = selectAll;
-            updateHostSelection(host.hostId, selectAll);
+    visibleHostRows.forEach(row => {
+        const hostId = row.getAttribute('data-host-id');
+        console.log('Processing host with ID:', hostId);
+        if (hostId) {
+            // Select the host
+            const checkbox = row.querySelector('input[type="checkbox"]');
+            if (checkbox && !checkbox.checked) {
+                console.log('Selecting host:', hostId);
+                checkbox.checked = true;
+                updateHostSelection(hostId, true);
+            }
+            
+            // Also select all log sources under this host
+            const host = hostAnalysis.find(h => String(h.hostId) === String(hostId));
+            if (host && host.logSources) {
+                console.log('Found host with log sources:', host.logSources.length);
+                host.logSources.forEach(logSource => {
+                    if (logSource.recommended && !selectedLogSources.includes(String(logSource.id))) {
+                        selectedLogSources.push(String(logSource.id));
+                        console.log('Added log source to selection:', logSource.id);
+                    }
+                });
+            }
         }
     });
     
+    console.log('Final selectedHosts:', selectedHosts);
+    console.log('Final selectedLogSources:', selectedLogSources);
     updateHostSummary();
 }
 
 function selectAllHosts() {
+    console.log('selectAllHosts called');
     hostAnalysis.forEach(host => {
-        const checkbox = document.querySelector(`[data-host-id="${host.hostId}"]`);
-        if (checkbox && !checkbox.checked) {
-            checkbox.checked = true;
-            updateHostSelection(host.hostId, true);
+        // Find the row with the host ID, then find the checkbox within it
+        const hostRow = document.querySelector(`[data-host-id="${host.hostId}"]`);
+        if (hostRow) {
+            const checkbox = hostRow.querySelector('input[type="checkbox"]');
+            if (checkbox && !checkbox.checked) {
+                console.log('Selecting host:', host.hostId);
+                checkbox.checked = true;
+                updateHostSelection(host.hostId, true);
+            }
+        } else {
+            console.log('Host row not found for ID:', host.hostId);
+        }
+        
+        // Also select all log sources under this host (both recommended and non-recommended)
+        if (host.logSources) {
+            host.logSources.forEach(logSource => {
+                if (!selectedLogSources.includes(String(logSource.id))) {
+                    selectedLogSources.push(String(logSource.id));
+                    console.log('Added log source to selection:', logSource.id);
+                }
+                
+                // Also check the log source checkbox in the UI
+                const logSourceCheckbox = document.querySelector(`input[onchange*="updateLogSourceSelection('${logSource.id}'"]`);
+                if (logSourceCheckbox && !logSourceCheckbox.checked) {
+                    logSourceCheckbox.checked = true;
+                    console.log('Checked log source checkbox:', logSource.id);
+                }
+            });
         }
     });
+    console.log('Final selectedHosts:', selectedHosts);
+    console.log('Final selectedLogSources:', selectedLogSources);
     updateHostSummary();
 }
 
 function deselectAllHosts() {
+    console.log('deselectAllHosts called');
+    console.log('Current selectedHosts:', selectedHosts);
+    console.log('Current selectedLogSources:', selectedLogSources);
+    
+    // Deselect all host checkboxes
     selectedHosts.forEach(hostId => {
-        const checkbox = document.querySelector(`[data-host-id="${hostId}"]`);
-        if (checkbox) {
-            checkbox.checked = false;
-            updateHostSelection(hostId, false);
+        const hostRow = document.querySelector(`[data-host-id="${hostId}"]`);
+        if (hostRow) {
+            const checkbox = hostRow.querySelector('input[type="checkbox"]');
+            if (checkbox) {
+                checkbox.checked = false;
+                console.log('Unchecked host checkbox:', hostId);
+            }
         }
     });
+    
+    // Deselect all log source checkboxes
+    const allLogSourceCheckboxes = document.querySelectorAll('input[onchange*="updateLogSourceSelection"]');
+    allLogSourceCheckboxes.forEach(checkbox => {
+        checkbox.checked = false;
+    });
+    
+    // Clear all selections
+    selectedHosts = [];
+    selectedLogSources = [];
+    
+    // Update visual state for all host items
+    const hostItems = document.querySelectorAll('[data-host-id]');
+    hostItems.forEach(item => {
+        item.classList.remove('selected');
+    });
+    
+    // Update execute button state
+    const executeBtn = document.getElementById('executeRetirementBtn');
+    if (executeBtn) {
+        executeBtn.disabled = true;
+    }
+    
+    console.log('After clearing - selectedHosts:', selectedHosts);
+    console.log('After clearing - selectedLogSources:', selectedLogSources);
+    
     updateHostSummary();
 }
 
 function executeRetirement() {
-    if (selectedHosts.length === 0) {
-        showToast('Please select at least one host to retire', 'warning');
+    if (selectedHosts.length === 0 && selectedLogSources.length === 0) {
+        showToast('Please select at least one host or log source to retire', 'warning');
         return;
     }
     
     // Confirm action
-    const totalLogSources = selectedHosts.reduce((total, hostId) => {
+    const totalLogSourcesFromHosts = selectedHosts.reduce((total, hostId) => {
         const host = hostAnalysis.find(h => String(h.hostId) === String(hostId));
         return total + (host ? host.logSourceCount : 0);
     }, 0);
     
-    if (!confirm(`Are you sure you want to retire ${selectedHosts.length} hosts with ${totalLogSources} log sources? This action cannot be undone.`)) {
+    const totalItems = selectedHosts.length + selectedLogSources.length;
+    const totalLogSources = totalLogSourcesFromHosts + selectedLogSources.length;
+    
+    let confirmMessage = `Are you sure you want to retire ${totalItems} items?`;
+    if (selectedHosts.length > 0) {
+        confirmMessage += `\n- ${selectedHosts.length} hosts (${totalLogSourcesFromHosts} log sources)`;
+    }
+    if (selectedLogSources.length > 0) {
+        confirmMessage += `\n- ${selectedLogSources.length} individual log sources`;
+    }
+    confirmMessage += `\n\nThis action cannot be undone.`;
+    
+    if (!confirm(confirmMessage)) {
         return;
     }
     
@@ -1950,6 +2139,276 @@ function exportReport() {
     document.body.removeChild(link);
     
     showToast('Report downloaded successfully', 'success');
+}
+
+// Rollback Functions
+
+function loadRollbackHistory() {
+    console.log('Loading rollback history...');
+    
+    fetch('/api/rollback/history')
+        .then(response => response.json())
+        .then(history => {
+            console.log('Rollback history loaded:', history);
+            displayRollbackHistory(history);
+        })
+        .catch(error => {
+            console.error('Error loading rollback history:', error);
+            showToast('Error loading rollback history', 'error');
+        });
+}
+
+function displayRollbackHistory(history) {
+    const rollbackHistoryDiv = document.getElementById('rollbackHistory');
+    
+    if (!history || history.length === 0) {
+        rollbackHistoryDiv.innerHTML = `
+            <div class="no-rollbacks">
+                <i class="fas fa-info-circle"></i>
+                <p>No rollback points available</p>
+                <small>Rollback points are created automatically when retirement operations are performed</small>
+            </div>
+        `;
+        return;
+    }
+    
+    rollbackHistoryDiv.innerHTML = history.map(rollback => `
+        <div class="rollback-item" data-rollback-id="${rollback.id}">
+            <div class="rollback-header">
+                <div class="rollback-info">
+                    <h4>${rollback.description}</h4>
+                    <div class="rollback-meta">
+                        <span class="rollback-date">
+                            <i class="fas fa-clock"></i> ${new Date(rollback.timestamp).toLocaleString()}
+                        </span>
+                        <span class="rollback-user">
+                            <i class="fas fa-user"></i> ${rollback.user}
+                        </span>
+                    </div>
+                </div>
+                <div class="rollback-stats">
+                    <div class="stat-item">
+                        <span class="stat-number">${rollback.logSources}</span>
+                        <span class="stat-label">Log Sources</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-number">${rollback.hosts}</span>
+                        <span class="stat-label">Hosts</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-number">${rollback.systemMonitors}</span>
+                        <span class="stat-label">System Monitors</span>
+                    </div>
+                </div>
+            </div>
+            <div class="rollback-actions">
+                <button class="btn btn-primary btn-sm" onclick="previewRollback('${rollback.id}')">
+                    <i class="fas fa-eye"></i> Preview
+                </button>
+                <button class="btn btn-warning btn-sm" onclick="executeRollback('${rollback.id}')">
+                    <i class="fas fa-undo"></i> Execute Rollback
+                </button>
+                <button class="btn btn-danger btn-sm" onclick="deleteRollback('${rollback.id}')">
+                    <i class="fas fa-trash"></i> Delete
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function previewRollback(rollbackId) {
+    console.log('Previewing rollback:', rollbackId);
+    
+    fetch(`/api/rollback/${rollbackId}`)
+        .then(response => response.json())
+        .then(rollback => {
+            console.log('Rollback details:', rollback);
+            showRollbackPreview(rollback);
+        })
+        .catch(error => {
+            console.error('Error loading rollback details:', error);
+            showToast('Error loading rollback details', 'error');
+        });
+}
+
+function showRollbackPreview(rollback) {
+    const previewContent = `
+        <div class="rollback-preview">
+            <h3>Rollback Preview: ${rollback.description}</h3>
+            <div class="preview-section">
+                <h4>Log Sources (${rollback.logSourceChanges.length})</h4>
+                <div class="preview-list">
+                    ${rollback.logSourceChanges.slice(0, 5).map(change => `
+                        <div class="preview-item">
+                            <strong>${change.hostName}</strong> - ${change.originalName}
+                            <div class="change-details">
+                                <span class="original">${change.originalStatus}</span> → 
+                                <span class="current">${change.currentStatus}</span>
+                            </div>
+                        </div>
+                    `).join('')}
+                    ${rollback.logSourceChanges.length > 5 ? `<div class="preview-more">... and ${rollback.logSourceChanges.length - 5} more</div>` : ''}
+                </div>
+            </div>
+            <div class="preview-section">
+                <h4>Hosts (${rollback.hostChanges.length})</h4>
+                <div class="preview-list">
+                    ${rollback.hostChanges.slice(0, 5).map(change => `
+                        <div class="preview-item">
+                            <strong>${change.hostName}</strong>
+                            <div class="change-details">
+                                <span class="original">${change.originalStatus}</span> → 
+                                <span class="current">${change.currentStatus}</span>
+                            </div>
+                        </div>
+                    `).join('')}
+                    ${rollback.hostChanges.length > 5 ? `<div class="preview-more">... and ${rollback.hostChanges.length - 5} more</div>` : ''}
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Create and show modal
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-eye"></i> Rollback Preview</h3>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-body">
+                ${previewContent}
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeAllModals()">
+                    <i class="fas fa-times"></i> Close
+                </button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    modal.style.display = 'block';
+}
+
+function executeRollback(rollbackId) {
+    if (!confirm('Are you sure you want to execute this rollback? This will undo the retirement changes and cannot be undone.')) {
+        return;
+    }
+    
+    console.log('Executing rollback:', rollbackId);
+    showLoadingOverlay();
+    
+    fetch(`/api/rollback/${rollbackId}/execute`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        hideLoadingOverlay();
+        if (data.status === 'success') {
+            showToast('Rollback executed successfully', 'success');
+            loadRollbackHistory(); // Refresh the history
+        } else {
+            showToast('Rollback execution failed', 'error');
+        }
+    })
+    .catch(error => {
+        hideLoadingOverlay();
+        console.error('Error executing rollback:', error);
+        showToast('Error executing rollback', 'error');
+    });
+}
+
+function deleteRollback(rollbackId) {
+    if (!confirm('Are you sure you want to delete this rollback point? This action cannot be undone.')) {
+        return;
+    }
+    
+    console.log('Deleting rollback:', rollbackId);
+    
+    fetch(`/api/rollback/${rollbackId}`, {
+        method: 'DELETE'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            showToast('Rollback deleted successfully', 'success');
+            loadRollbackHistory(); // Refresh the history
+        } else {
+            showToast('Failed to delete rollback', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error deleting rollback:', error);
+        showToast('Error deleting rollback', 'error');
+    });
+}
+
+function cleanupRollbackHistory() {
+    if (!confirm('Are you sure you want to cleanup old rollback points? This will delete rollback points older than the retention period.')) {
+        return;
+    }
+    
+    console.log('Cleaning up rollback history...');
+    showLoadingOverlay();
+    
+    // This would typically call a cleanup API endpoint
+    // For now, just refresh the history
+    setTimeout(() => {
+        hideLoadingOverlay();
+        showToast('Rollback cleanup completed', 'success');
+        loadRollbackHistory();
+    }, 1000);
+}
+
+function handleRollbackConfigSubmit(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const formData = new FormData(e.target);
+    const rollbackConfig = {
+        enabled: formData.get('rollbackEnabled') === 'on',
+        retentionDays: parseInt(formData.get('rollbackRetentionDays')),
+        maxRollbackPoints: parseInt(formData.get('rollbackMaxPoints')),
+        autoBackup: formData.get('rollbackAutoBackup') === 'on',
+        backupLocation: formData.get('rollbackBackupLocation')
+    };
+    
+    // Validate configuration
+    if (rollbackConfig.retentionDays < 1) {
+        showToast('Retention days must be at least 1', 'error');
+        return;
+    }
+    
+    if (rollbackConfig.maxRollbackPoints < 1) {
+        showToast('Maximum rollback points must be at least 1', 'error');
+        return;
+    }
+    
+    // Save configuration
+    console.log('Saving rollback configuration:', rollbackConfig);
+    fetch('/api/config', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            rollback: rollbackConfig
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log('Rollback configuration saved:', data);
+        showToast('Rollback configuration saved successfully!', 'success');
+    })
+    .catch(error => {
+        console.error('Error saving rollback configuration:', error);
+        showToast('Error saving rollback configuration', 'error');
+    });
 }
 
 // Host Selection Functions

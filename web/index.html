@@ -104,6 +104,51 @@
                     <div id="backupStatus" class="status-message"></div>
                 </div>
             </div>
+
+            <!-- Rollback Configuration Section -->
+            <div class="card">
+                <h2><i class="fas fa-undo"></i> Rollback Configuration</h2>
+                <div class="rollback-config-content">
+                    <p>Configure rollback settings for retirement operations. Rollback allows you to undo changes made by LRCleaner.</p>
+                    <form id="rollbackConfigForm">
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="rollbackEnabled" name="rollbackEnabled" checked>
+                                <span class="checkmark"></span>
+                                Enable Rollback Functionality
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label for="rollbackRetentionDays">Retention Days:</label>
+                            <input type="number" id="rollbackRetentionDays" name="rollbackRetentionDays" value="30" min="1" max="365" required>
+                            <small>Number of days to keep rollback data (minimum 1 day)</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="rollbackMaxPoints">Maximum Rollback Points:</label>
+                            <input type="number" id="rollbackMaxPoints" name="rollbackMaxPoints" value="10" min="1" max="50" required>
+                            <small>Maximum number of rollback points to maintain</small>
+                        </div>
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="rollbackAutoBackup" name="rollbackAutoBackup" checked>
+                                <span class="checkmark"></span>
+                                Auto Backup Before Rollback
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label for="rollbackBackupLocation">Rollback Storage Location:</label>
+                            <input type="text" id="rollbackBackupLocation" name="rollbackBackupLocation" value="./rollback/" placeholder="./rollback/">
+                            <small>Directory to store rollback data files</small>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-save"></i> Save Rollback Settings
+                            </button>
+                        </div>
+                    </form>
+                    <div id="rollbackConfigStatus" class="status-message"></div>
+                </div>
+            </div>
         </div>
 
         <!-- Analysis Section (default view) -->
@@ -231,7 +276,7 @@
                                 <i class="fas fa-times"></i> Deselect All
                             </button>
                         </div>
-                        <div class="host-summary" id="hostSummary"></div>
+                        <div class="host-summary" id="hostSummaryModal1"></div>
                     </div>
                     <div class="host-list" id="hostList">
                         <!-- Hosts will be populated here -->
@@ -370,7 +415,7 @@
                                 <i class="fas fa-times"></i> Deselect All
                             </button>
                         </div>
-                        <div class="host-summary" id="hostSummary"></div>
+                        <div class="host-summary" id="hostSummaryModal2"></div>
                     </div>
                     
                     <!-- Filter Controls -->
@@ -498,20 +543,18 @@
                 
                 <!-- Host Selection Controls (shown only in apply mode) -->
                 <div id="hostSelectionControls" class="host-selection-controls" style="display: none;">
+                    <div class="host-summary" id="hostSummaryResults"></div>
                     <div class="select-all-controls">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="selectAllHosts">
-                            <span class="checkmark"></span>
-                            Select All Recommended Hosts
-                        </label>
-                        <button id="selectAllBtn" class="btn btn-secondary btn-sm">
+                        <button id="selectVisibleBtn" class="btn btn-secondary btn-sm">
+                            <i class="fas fa-eye"></i> Select Visible Hosts
+                        </button>
+                        <button id="selectAllHostsBtn" class="btn btn-secondary btn-sm">
                             <i class="fas fa-check-double"></i> Select All
                         </button>
-                        <button id="deselectAllBtn" class="btn btn-secondary btn-sm">
+                        <button id="deselectAllHostsBtn" class="btn btn-secondary btn-sm">
                             <i class="fas fa-times"></i> Deselect All
                         </button>
                     </div>
-                    <div class="host-summary" id="hostSummary"></div>
                     <div class="host-selection-actions">
                         <button id="executeRetirementBtn" class="btn btn-warning" disabled>
                             <i class="fas fa-check"></i> Execute Retirement
@@ -532,9 +575,44 @@
                     </table>
                 </div>
                 <div id="resultsSummary" class="results-summary"></div>
+                
+                <!-- Export Button -->
+                <div class="export-section" style="margin-top: 20px; text-align: center;">
+                    <button id="exportBtn" class="btn btn-primary" disabled>
+                        <i class="fas fa-download"></i> Export Results
+                    </button>
+                </div>
             </div>
         </section>
         </div> <!-- End analysis section -->
+
+        <!-- Rollback Section -->
+        <div id="rollbackSection" class="rollback-section" style="display: none;">
+            <div class="card">
+                <h2><i class="fas fa-undo"></i> Rollback History</h2>
+                <div class="rollback-info">
+                    <p>View and manage rollback points for retirement operations. Rollback allows you to undo changes made by LRCleaner.</p>
+                </div>
+                
+                <!-- Rollback Controls -->
+                <div class="rollback-controls">
+                    <button id="refreshRollbackBtn" class="btn btn-primary">
+                        <i class="fas fa-refresh"></i> Refresh History
+                    </button>
+                    <button id="cleanupRollbackBtn" class="btn btn-secondary">
+                        <i class="fas fa-trash"></i> Cleanup Old Rollbacks
+                    </button>
+                </div>
+                
+                <!-- Rollback History List -->
+                <div class="rollback-history" id="rollbackHistory">
+                    <div class="loading-message">
+                        <i class="fas fa-spinner fa-spin"></i> Loading rollback history...
+                    </div>
+                </div>
+            </div>
+        </div>
+
         </div> <!-- End container -->
     </div> <!-- End main content -->
 

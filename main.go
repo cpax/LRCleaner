@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
 	"encoding/json"
@@ -14,7 +15,9 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,10 +31,11 @@ import (
 
 // Configuration structure
 type Config struct {
-	Hostname           string   `json:"hostname"`
-	APIKey             string   `json:"apiKey"`
-	Port               int      `json:"port"`
-	ExcludedLogSources []string `json:"excludedLogSources"`
+	Hostname           string         `json:"hostname"`
+	APIKey             string         `json:"apiKey"`
+	Port               int            `json:"port"`
+	ExcludedLogSources []string       `json:"excludedLogSources"`
+	Rollback           RollbackConfig `json:"rollback"`
 }
 
 // LogRhythm API structures
@@ -44,6 +48,7 @@ type LogSource struct {
 	LogSourceType     LogSourceType `json:"logSourceType"`
 	SystemMonitorID   interface{}   `json:"systemMonitorId"`   // Collection host ID
 	SystemMonitorName string        `json:"systemMonitorName"` // Collection host name
+	Recommended       bool          `json:"recommended"`
 }
 
 type Host struct {
@@ -104,6 +109,73 @@ type RetirementRecord struct {
 	Timestamp      time.Time   `json:"timestamp"`
 }
 
+// Rollback data structures
+type RollbackData struct {
+	ID            string    `json:"id"`
+	Timestamp     time.Time `json:"timestamp"`
+	OperationType string    `json:"operationType"` // "retirement", "host_retirement", etc.
+	User          string    `json:"user"`          // Who performed the operation
+	Description   string    `json:"description"`   // Human-readable description
+
+	// Log Source Changes
+	LogSourceChanges []LogSourceRollback `json:"logSourceChanges"`
+
+	// Host Changes
+	HostChanges []HostRollback `json:"hostChanges"`
+
+	// System Monitor Changes
+	SystemMonitorChanges []SystemMonitorRollback `json:"systemMonitorChanges"`
+
+	// Metadata
+	JobID          string `json:"jobId"`
+	BackupLocation string `json:"backupLocation,omitempty"`
+	Checksum       string `json:"checksum"` // For integrity verification
+}
+
+type LogSourceRollback struct {
+	LogSourceID     interface{} `json:"logSourceId"`
+	HostID          interface{} `json:"hostId"`
+	HostName        string      `json:"hostName"`
+	OriginalName    string      `json:"originalName"`
+	OriginalStatus  string      `json:"originalStatus"`
+	CurrentName     string      `json:"currentName"`
+	CurrentStatus   string      `json:"currentStatus"`
+	SystemMonitorID interface{} `json:"systemMonitorId,omitempty"`
+}
+
+type HostRollback struct {
+	HostID              interface{}      `json:"hostId"`
+	HostName            string           `json:"hostName"`
+	OriginalName        string           `json:"originalName"`
+	OriginalStatus      string           `json:"originalStatus"`
+	OriginalIdentifiers []HostIdentifier `json:"originalIdentifiers"`
+	CurrentName         string           `json:"currentName"`
+	CurrentStatus       string           `json:"currentStatus"`
+}
+
+type SystemMonitorRollback struct {
+	SystemMonitorID     interface{} `json:"systemMonitorId"`
+	SystemMonitorName   string      `json:"systemMonitorName"`
+	OriginalStatus      string      `json:"originalStatus"`
+	OriginalLicenseType string      `json:"originalLicenseType"`
+	CurrentStatus       string      `json:"currentStatus"`
+	CurrentLicenseType  string      `json:"currentLicenseType"`
+}
+
+type HostIdentifier struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+type RollbackConfig struct {
+	Enabled           bool   `json:"enabled"`
+	RetentionDays     int    `json:"retentionDays"`
+	MaxRollbackPoints int    `json:"maxRollbackPoints"`
+	AutoBackup        bool   `json:"autoBackup"`
+	BackupLocation    string `json:"backupLocation"`
+	ChecksumAlgorithm string `json:"checksumAlgorithm"`
+}
+
 type JobStatus struct {
 	ID                     string                   `json:"id"`
 	Status                 string                   `json:"status"`
@@ -132,6 +204,9 @@ var (
 	// WebSocket connection management
 	wsConnections = make(map[*websocket.Conn]bool)
 	wsMutex       sync.RWMutex
+	// Rollback management
+	rollbackHistory = make(map[string]*RollbackData)
+	rollbackMutex   sync.RWMutex
 )
 
 func findAvailablePort() int {
@@ -157,10 +232,10 @@ func findAvailablePort() int {
 		return 8080
 	}
 
-	// If 8080 is not available, find an available port starting from 3000
+	// If 8080 is not available, find an available port starting from 8000
 	fmt.Println("Port 8080 is in use, searching for available port...")
 
-	for port := 3000; port <= 65535; port++ {
+	for port := 8000; port <= 8500; port++ {
 		if isPortAvailable(port) {
 			fmt.Printf("Found available port: %d\n", port)
 			return port
@@ -243,6 +318,12 @@ func main() {
 	api.HandleFunc("/jobs/{jobId}", handleJobStatus).Methods("GET")
 	api.HandleFunc("/ws", handleWebSocket)
 
+	// Rollback API routes
+	api.HandleFunc("/rollback/history", handleRollbackHistory).Methods("GET")
+	api.HandleFunc("/rollback/{rollbackId}", handleRollbackDetails).Methods("GET")
+	api.HandleFunc("/rollback/{rollbackId}/execute", handleExecuteRollback).Methods("POST")
+	api.HandleFunc("/rollback/{rollbackId}", handleDeleteRollback).Methods("DELETE")
+
 	// Start server
 	server := &http.Server{
 		Addr:    ":" + strconv.Itoa(port),
@@ -265,17 +346,38 @@ func main() {
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
 
-	// Graceful shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Handle shutdown gracefully
+	go func() {
+		<-quit
+		fmt.Println("\n🛑 Shutdown signal received. Gracefully shutting down LRCleaner...")
+		fmt.Println("   - Closing WebSocket connections...")
+		fmt.Println("   - Stopping HTTP server...")
+		fmt.Println("   - Please wait...")
 
-	if err := server.Shutdown(ctx); err != nil {
-		log.Fatal("Server forced to shutdown:", err)
-	}
+		// Close all WebSocket connections
+		wsMutex.Lock()
+		for conn := range wsConnections {
+			conn.Close()
+		}
+		wsConnections = make(map[*websocket.Conn]bool)
+		wsMutex.Unlock()
 
-	fmt.Println("LRCleaner stopped")
+		// Graceful shutdown with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := server.Shutdown(ctx); err != nil {
+			fmt.Printf("⚠️  Server forced to shutdown: %v\n", err)
+		} else {
+			fmt.Println("✅ LRCleaner stopped gracefully")
+		}
+
+		os.Exit(0)
+	}()
+
+	// Keep the main goroutine alive
+	select {}
 }
 
 func loadConfig() *Config {
@@ -287,6 +389,14 @@ func loadConfig() *Config {
 			"Echo",
 			"AI Engine",
 			"LogRhythm System",
+		},
+		Rollback: RollbackConfig{
+			Enabled:           true,
+			RetentionDays:     30,
+			MaxRollbackPoints: 10,
+			AutoBackup:        true,
+			BackupLocation:    "./rollback/",
+			ChecksumAlgorithm: "sha256",
 		},
 	}
 
@@ -1243,17 +1353,33 @@ func analyzeHostsForRetirement(jobID string, selectedDate time.Time) {
 		// Get ping result from our concurrent test
 		host.PingResult = pingResults[host.HostName]
 
-		// Determine if recommended for retirement
-		// Recommend if ping fails or no recent logs
-		host.Recommended = (host.PingResult == "Failure") ||
-			(host.MaxLogDate != "" &&
-				time.Since(parseTime(host.MaxLogDate)) > 30*24*time.Hour)
+		// Determine recommendations for each log source
+		recommendedLogSources := 0
+		for i := range host.LogSources {
+			ls := &host.LogSources[i]
 
-		// Log recommendation
+			// Only recommend log source if ping fails (host is not reachable)
+			// If host is pingable but has old logs, recommend troubleshooting instead
+			ls.Recommended = (host.PingResult == "Failure")
+
+			if ls.Recommended {
+				recommendedLogSources++
+				log.Printf("  → Log source %s is RECOMMENDED for retirement (host not pingable)", ls.Name)
+			} else if host.PingResult == "Success" && ls.MaxLogDate != "" && parseTime(ls.MaxLogDate).Before(selectedDate) {
+				log.Printf("  → Log source %s has old logs but host is pingable - recommend troubleshooting", ls.Name)
+			} else {
+				log.Printf("  → Log source %s is NOT recommended for retirement", ls.Name)
+			}
+		}
+
+		// Only recommend host if ALL log sources are recommended
+		host.Recommended = (recommendedLogSources > 0) && (recommendedLogSources == len(host.LogSources))
+
+		// Log host recommendation
 		if host.Recommended {
-			log.Printf("  → Host %s is RECOMMENDED for retirement", host.HostName)
+			log.Printf("  → Host %s is RECOMMENDED for retirement (all %d log sources recommended)", host.HostName, recommendedLogSources)
 		} else {
-			log.Printf("  → Host %s is NOT recommended for retirement", host.HostName)
+			log.Printf("  → Host %s is NOT recommended for retirement (%d/%d log sources recommended)", host.HostName, recommendedLogSources, len(host.LogSources))
 		}
 
 		hostAnalysis = append(hostAnalysis, *host)
@@ -1390,6 +1516,12 @@ func executeRetirement(jobID string, selectedHosts []string) {
 	jobsMutex.Lock()
 	job := jobs[jobID]
 	jobsMutex.Unlock()
+
+	// Create rollback data before starting retirement
+	rollbackData := createRollbackData(jobID, selectedHosts)
+	if rollbackData != nil {
+		saveRollbackData(rollbackData)
+	}
 
 	defer func() {
 		jobsMutex.Lock()
@@ -2414,4 +2546,550 @@ func generateTextReport(job *JobStatus) []byte {
 	report += fmt.Sprintf("Generated by LRCleaner on %s\n", time.Now().Format("2006-01-02 15:04:05"))
 
 	return []byte(report)
+}
+
+// Rollback Functions
+
+func createRollbackData(jobID string, selectedHosts []string) *RollbackData {
+	if !config.Rollback.Enabled {
+		return nil
+	}
+
+	// Get the host analysis from the previous job
+	var hostAnalysis []HostAnalysis
+	jobsMutex.RLock()
+	for _, otherJob := range jobs {
+		if len(otherJob.HostAnalysis) > 0 {
+			hostAnalysis = otherJob.HostAnalysis
+			break
+		}
+	}
+	jobsMutex.RUnlock()
+
+	if len(hostAnalysis) == 0 {
+		log.Printf("No host analysis found for rollback data creation")
+		return nil
+	}
+
+	// Create map of selected hosts
+	selectedMap := make(map[string]bool)
+	for _, hostID := range selectedHosts {
+		selectedMap[hostID] = true
+	}
+
+	// Find hosts to retire
+	var hostsToRetire []HostAnalysis
+	for _, host := range hostAnalysis {
+		if selectedMap[idToString(host.HostID)] {
+			hostsToRetire = append(hostsToRetire, host)
+		}
+	}
+
+	rollbackID := fmt.Sprintf("rollback_%d", time.Now().Unix())
+	rollbackData := &RollbackData{
+		ID:            rollbackID,
+		Timestamp:     time.Now(),
+		OperationType: "retirement",
+		User:          "system", // TODO: Get actual user
+		Description:   fmt.Sprintf("Retirement of %d hosts with %d log sources", len(hostsToRetire), getTotalLogSources(hostsToRetire)),
+		JobID:         jobID,
+		Checksum:      "", // Will be calculated when saving
+	}
+
+	// Capture log source changes
+	for _, host := range hostsToRetire {
+		for _, logSource := range host.LogSources {
+			logSourceChange := LogSourceRollback{
+				LogSourceID:     logSource.ID,
+				HostID:          host.HostID,
+				HostName:        host.HostName,
+				OriginalName:    logSource.Name,
+				OriginalStatus:  logSource.RecordStatus,
+				CurrentName:     logSource.Name,         // Will be updated after retirement
+				CurrentStatus:   logSource.RecordStatus, // Will be updated after retirement
+				SystemMonitorID: logSource.SystemMonitorID,
+			}
+			rollbackData.LogSourceChanges = append(rollbackData.LogSourceChanges, logSourceChange)
+		}
+	}
+
+	// Capture host changes
+	for _, host := range hostsToRetire {
+		// Get original host data
+		originalHostData := getHostData(host.HostID)
+		hostChange := HostRollback{
+			HostID:              host.HostID,
+			HostName:            host.HostName,
+			OriginalName:        originalHostData["name"].(string),
+			OriginalStatus:      originalHostData["recordStatusName"].(string),
+			OriginalIdentifiers: extractHostIdentifiers(originalHostData),
+			CurrentName:         originalHostData["name"].(string),             // Will be updated after retirement
+			CurrentStatus:       originalHostData["recordStatusName"].(string), // Will be updated after retirement
+		}
+		rollbackData.HostChanges = append(rollbackData.HostChanges, hostChange)
+	}
+
+	return rollbackData
+}
+
+func getTotalLogSources(hosts []HostAnalysis) int {
+	total := 0
+	for _, host := range hosts {
+		total += host.LogSourceCount
+	}
+	return total
+}
+
+func getHostData(hostID interface{}) map[string]interface{} {
+	url := fmt.Sprintf("https://%s:%d/lr-admin-api/hosts/%s", config.Hostname, config.Port, idToString(hostID))
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Printf("Error creating request for host %s: %v", idToString(hostID), err)
+		return make(map[string]interface{})
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error getting host %s: %v", idToString(hostID), err)
+		return make(map[string]interface{})
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Failed to get host %s, status: %d", idToString(hostID), resp.StatusCode)
+		return make(map[string]interface{})
+	}
+
+	var hostData map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&hostData); err != nil {
+		log.Printf("Error decoding host %s: %v", idToString(hostID), err)
+		return make(map[string]interface{})
+	}
+
+	return hostData
+}
+
+func extractHostIdentifiers(hostData map[string]interface{}) []HostIdentifier {
+	var identifiers []HostIdentifier
+
+	if hostIdentifiers, ok := hostData["hostIdentifiers"].([]interface{}); ok {
+		for _, identifier := range hostIdentifiers {
+			if identifierMap, ok := identifier.(map[string]interface{}); ok {
+				if identifierType, hasType := identifierMap["type"].(string); hasType {
+					if identifierValue, hasValue := identifierMap["value"].(string); hasValue {
+						identifiers = append(identifiers, HostIdentifier{
+							Type:  identifierType,
+							Value: identifierValue,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	return identifiers
+}
+
+func saveRollbackData(rollbackData *RollbackData) {
+	// Create rollback directory if it doesn't exist
+	rollbackDir := config.Rollback.BackupLocation
+	if err := os.MkdirAll(rollbackDir, 0755); err != nil {
+		log.Printf("Error creating rollback directory: %v", err)
+		return
+	}
+
+	// Calculate checksum
+	jsonData, err := json.Marshal(rollbackData)
+	if err != nil {
+		log.Printf("Error marshaling rollback data: %v", err)
+		return
+	}
+
+	rollbackData.Checksum = calculateChecksum(jsonData)
+
+	// Save to file
+	filename := fmt.Sprintf("LRCleaner_rollback_%s_%s.json",
+		rollbackData.Timestamp.Format("20060102_150405"),
+		rollbackData.OperationType)
+	filepath := filepath.Join(rollbackDir, filename)
+
+	if err := os.WriteFile(filepath, jsonData, 0644); err != nil {
+		log.Printf("Error saving rollback data: %v", err)
+		return
+	}
+
+	// Store in memory
+	rollbackMutex.Lock()
+	rollbackHistory[rollbackData.ID] = rollbackData
+	rollbackMutex.Unlock()
+
+	log.Printf("Rollback data saved: %s", filepath)
+}
+
+func calculateChecksum(data []byte) string {
+	hash := sha256.Sum256(data)
+	return fmt.Sprintf("%x", hash)
+}
+
+// Rollback API Handlers
+
+func handleRollbackHistory(w http.ResponseWriter, r *http.Request) {
+	rollbackMutex.RLock()
+	defer rollbackMutex.RUnlock()
+
+	var history []map[string]interface{}
+	for _, rollback := range rollbackHistory {
+		history = append(history, map[string]interface{}{
+			"id":             rollback.ID,
+			"timestamp":      rollback.Timestamp,
+			"operation":      rollback.OperationType,
+			"description":    rollback.Description,
+			"user":           rollback.User,
+			"logSources":     len(rollback.LogSourceChanges),
+			"hosts":          len(rollback.HostChanges),
+			"systemMonitors": len(rollback.SystemMonitorChanges),
+		})
+	}
+
+	// Sort by timestamp (newest first)
+	sort.Slice(history, func(i, j int) bool {
+		return history[i]["timestamp"].(time.Time).After(history[j]["timestamp"].(time.Time))
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(history)
+}
+
+func handleRollbackDetails(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	rollbackID := vars["rollbackId"]
+
+	rollbackMutex.RLock()
+	rollback, exists := rollbackHistory[rollbackID]
+	rollbackMutex.RUnlock()
+
+	if !exists {
+		http.Error(w, "Rollback not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rollback)
+}
+
+func handleExecuteRollback(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	rollbackID := vars["rollbackId"]
+
+	rollbackMutex.RLock()
+	rollback, exists := rollbackHistory[rollbackID]
+	rollbackMutex.RUnlock()
+
+	if !exists {
+		http.Error(w, "Rollback not found", http.StatusNotFound)
+		return
+	}
+
+	// Execute rollback
+	success := executeRollback(rollback)
+
+	if success {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "Rollback executed successfully"})
+	} else {
+		http.Error(w, "Rollback execution failed", http.StatusInternalServerError)
+	}
+}
+
+func handleDeleteRollback(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	rollbackID := vars["rollbackId"]
+
+	rollbackMutex.Lock()
+	defer rollbackMutex.Unlock()
+
+	if rollback, exists := rollbackHistory[rollbackID]; exists {
+		// Delete file
+		filename := fmt.Sprintf("LRCleaner_rollback_%s_%s.json",
+			rollback.Timestamp.Format("20060102_150405"),
+			rollback.OperationType)
+		filepath := filepath.Join(config.Rollback.BackupLocation, filename)
+		os.Remove(filepath)
+
+		// Remove from memory
+		delete(rollbackHistory, rollbackID)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "Rollback deleted"})
+	} else {
+		http.Error(w, "Rollback not found", http.StatusNotFound)
+	}
+}
+
+func executeRollback(rollback *RollbackData) bool {
+	log.Printf("Executing rollback: %s", rollback.ID)
+
+	success := true
+
+	// Rollback log sources
+	for _, logSourceChange := range rollback.LogSourceChanges {
+		if !rollbackLogSource(logSourceChange) {
+			success = false
+			log.Printf("Failed to rollback log source: %s", logSourceChange.LogSourceID)
+		}
+	}
+
+	// Rollback hosts
+	for _, hostChange := range rollback.HostChanges {
+		if !rollbackHost(hostChange) {
+			success = false
+			log.Printf("Failed to rollback host: %s", hostChange.HostID)
+		}
+	}
+
+	// Rollback system monitors
+	for _, systemMonitorChange := range rollback.SystemMonitorChanges {
+		if !rollbackSystemMonitor(systemMonitorChange) {
+			success = false
+			log.Printf("Failed to rollback system monitor: %s", systemMonitorChange.SystemMonitorID)
+		}
+	}
+
+	if success {
+		log.Printf("Rollback completed successfully: %s", rollback.ID)
+	} else {
+		log.Printf("Rollback completed with errors: %s", rollback.ID)
+	}
+
+	return success
+}
+
+func rollbackLogSource(change LogSourceRollback) bool {
+	// Get current log source data
+	url := fmt.Sprintf("https://%s:%d/lr-admin-api/logsources/%s", config.Hostname, config.Port, idToString(change.LogSourceID))
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Printf("Error creating GET request for log source %s: %v", idToString(change.LogSourceID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error getting log source %s: %v", idToString(change.LogSourceID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Failed to get log source %s, status: %d", idToString(change.LogSourceID), resp.StatusCode)
+		return false
+	}
+
+	var logSource map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&logSource); err != nil {
+		log.Printf("Error decoding log source %s: %v", idToString(change.LogSourceID), err)
+		return false
+	}
+
+	// Restore original values
+	logSource["name"] = change.OriginalName
+	logSource["recordStatus"] = change.OriginalStatus
+
+	// Remove "Retired by LRCleaner" suffix if present
+	if strings.Contains(logSource["name"].(string), "Retired by LRCleaner") {
+		logSource["name"] = strings.Replace(logSource["name"].(string), " Retired by LRCleaner", "", 1)
+	}
+
+	// PUT the updated log source back
+	jsonData, err := json.Marshal(logSource)
+	if err != nil {
+		log.Printf("Error marshaling updated log source %s: %v", idToString(change.LogSourceID), err)
+		return false
+	}
+
+	req, err = http.NewRequest("PUT", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Error creating PUT request for log source %s: %v", idToString(change.LogSourceID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error updating log source %s: %v", idToString(change.LogSourceID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		log.Printf("Successfully rolled back log source %s", idToString(change.LogSourceID))
+		return true
+	} else {
+		log.Printf("Failed to rollback log source %s, status: %d", idToString(change.LogSourceID), resp.StatusCode)
+		return false
+	}
+}
+
+func rollbackHost(change HostRollback) bool {
+	// Get current host data
+	url := fmt.Sprintf("https://%s:%d/lr-admin-api/hosts/%s", config.Hostname, config.Port, idToString(change.HostID))
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Printf("Error creating GET request for host %s: %v", idToString(change.HostID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error getting host %s: %v", idToString(change.HostID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Failed to get host %s, status: %d", idToString(change.HostID), resp.StatusCode)
+		return false
+	}
+
+	var host map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&host); err != nil {
+		log.Printf("Error decoding host %s: %v", idToString(change.HostID), err)
+		return false
+	}
+
+	// Restore original values
+	host["name"] = change.OriginalName
+	host["recordStatusName"] = change.OriginalStatus
+
+	// Remove "Retired by LRCleaner" suffix if present
+	if strings.Contains(host["name"].(string), "Retired by LRCleaner") {
+		host["name"] = strings.Replace(host["name"].(string), " Retired by LRCleaner", "", 1)
+	}
+
+	// Restore original identifiers
+	if len(change.OriginalIdentifiers) > 0 {
+		var identifiers []map[string]interface{}
+		for _, identifier := range change.OriginalIdentifiers {
+			identifiers = append(identifiers, map[string]interface{}{
+				"type":  identifier.Type,
+				"value": identifier.Value,
+			})
+		}
+		host["hostIdentifiers"] = identifiers
+	}
+
+	// Remove fields that are not allowed in PUT request
+	delete(host, "hostRoles")
+
+	// PUT the updated host back
+	jsonData, err := json.Marshal(host)
+	if err != nil {
+		log.Printf("Error marshaling updated host %s: %v", idToString(change.HostID), err)
+		return false
+	}
+
+	req, err = http.NewRequest("PUT", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Error creating PUT request for host %s: %v", idToString(change.HostID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error updating host %s: %v", idToString(change.HostID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		log.Printf("Successfully rolled back host %s", idToString(change.HostID))
+		return true
+	} else {
+		log.Printf("Failed to rollback host %s, status: %d", idToString(change.HostID), resp.StatusCode)
+		return false
+	}
+}
+
+func rollbackSystemMonitor(change SystemMonitorRollback) bool {
+	// Get current system monitor data
+	url := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(change.SystemMonitorID))
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Printf("Error creating GET request for system monitor %s: %v", idToString(change.SystemMonitorID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error getting system monitor %s: %v", idToString(change.SystemMonitorID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Failed to get system monitor %s, status: %d", idToString(change.SystemMonitorID), resp.StatusCode)
+		return false
+	}
+
+	var systemMonitor map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&systemMonitor); err != nil {
+		log.Printf("Error decoding system monitor %s: %v", idToString(change.SystemMonitorID), err)
+		return false
+	}
+
+	// Restore original values
+	systemMonitor["recordStatusName"] = change.OriginalStatus
+	systemMonitor["licenseType"] = change.OriginalLicenseType
+
+	// PUT the updated system monitor back
+	jsonData, err := json.Marshal(systemMonitor)
+	if err != nil {
+		log.Printf("Error marshaling updated system monitor %s: %v", idToString(change.SystemMonitorID), err)
+		return false
+	}
+
+	req, err = http.NewRequest("PUT", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Error creating PUT request for system monitor %s: %v", idToString(change.SystemMonitorID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error updating system monitor %s: %v", idToString(change.SystemMonitorID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		log.Printf("Successfully rolled back system monitor %s", idToString(change.SystemMonitorID))
+		return true
+	} else {
+		log.Printf("Failed to rollback system monitor %s, status: %d", idToString(change.SystemMonitorID), resp.StatusCode)
+		return false
+	}
 }

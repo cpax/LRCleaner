@@ -673,7 +673,7 @@ body {
 .table-container {
     overflow-x: auto;
     border-radius: 8px;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #4a5568;
 }
 
 table {
@@ -808,7 +808,8 @@ tr:hover {
 .host-selection-controls {
     margin-bottom: 20px;
     padding: 15px;
-    background: #f7fafc;
+    background: #1a202c;
+    border: 1px solid #4a5568;
     border-radius: 8px;
 }
 
@@ -825,7 +826,7 @@ tr:hover {
     align-items: center;
     cursor: pointer;
     font-weight: 500;
-    color: #4a5568;
+    color: #e2e8f0;
 }
 
 .checkbox-label input[type="checkbox"] {
@@ -835,17 +836,17 @@ tr:hover {
 
 .host-summary {
     font-size: 14px;
-    color: #718096;
+    color: #e2e8f0;
     padding: 10px;
-    background: white;
+    background: #2d3748;
     border-radius: 6px;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #4a5568;
 }
 
 .host-list {
     max-height: 400px;
     overflow-y: auto;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #4a5568;
     border-radius: 8px;
     margin-bottom: 20px;
 }
@@ -854,7 +855,7 @@ tr:hover {
     display: flex;
     align-items: center;
     padding: 15px;
-    border-bottom: 1px solid #e2e8f0;
+    border-bottom: 1px solid #4a5568;
     transition: background-color 0.2s ease;
 }
 
@@ -863,11 +864,11 @@ tr:hover {
 }
 
 .host-item:hover {
-    background-color: #f7fafc;
+    background-color: #2d3748;
 }
 
 .host-item.selected {
-    background-color: #fef5e7;
+    background-color: #2d3748;
     border-left: 4px solid #ed8936;
 }
 
@@ -882,13 +883,13 @@ tr:hover {
 
 .host-name {
     font-weight: 600;
-    color: #2d3748;
+    color: #e2e8f0;
     margin-bottom: 5px;
 }
 
 .host-details {
     font-size: 14px;
-    color: #718096;
+    color: #a0aec0;
     display: flex;
     gap: 20px;
     flex-wrap: wrap;
@@ -1129,8 +1130,8 @@ tr:hover {
 
 /* Host Selection Controls in Results Section */
 .host-selection-controls {
-    background: #f8f9fa;
-    border: 1px solid #e2e8f0;
+    background: #1a202c;
+    border: 1px solid #4a5568;
     border-radius: 8px;
     padding: 20px;
     margin-bottom: 20px;
@@ -1145,17 +1146,17 @@ tr:hover {
 
 .host-selection-controls .host-summary {
     font-size: 14px;
-    color: #495057;
+    color: #e2e8f0;
     margin-bottom: 15px;
     padding: 10px;
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
+    background: #2d3748;
+    border: 1px solid #4a5568;
     border-radius: 4px;
 }
 
 .host-selection-actions {
     display: flex;
-    justify-content: center;
+    justify-content: flex-start;
     gap: 15px;
 }
 
@@ -1168,8 +1169,8 @@ tr:hover {
 
 /* Host Summary Row Styles */
 .host-summary-row {
-    background-color: #f8f9fa;
-    border-left: 4px solid #007bff;
+    background-color: #2d3748;
+    border-left: 4px solid #667eea;
 }
 
 .host-summary-cell {
@@ -1179,25 +1180,26 @@ tr:hover {
 .host-summary-content {
     display: flex;
     align-items: center;
+    gap: 15px;
     padding: 12px 16px;
     cursor: pointer;
     transition: background-color 0.2s ease;
 }
 
 .host-summary-content:hover {
-    background-color: #e9ecef;
+    background-color: #4a5568;
 }
 
 .expand-icon {
     margin-right: 8px;
     font-size: 12px;
-    color: #6c757d;
+    color: #a0aec0;
     transition: transform 0.2s ease;
 }
 
 .host-name {
     font-weight: 600;
-    color: #212529;
+    color: #e2e8f0;
     margin-right: 16px;
     min-width: 200px;
 }
@@ -1211,23 +1213,23 @@ tr:hover {
 }
 
 .ping-status.ping-success {
-    background-color: #d4edda;
-    color: #155724;
+    background-color: #2d5a3d;
+    color: #9ae6b4;
 }
 
 .ping-status.ping-failure {
-    background-color: #f8d7da;
-    color: #721c24;
+    background-color: #5a2a2a;
+    color: #feb2b2;
 }
 
 .log-source-count {
-    color: #6c757d;
+    color: #a0aec0;
     font-size: 14px;
 }
 
 /* Host Details Row Styles */
 .host-details-row {
-    background-color: #ffffff;
+    background-color: #1a202c;
 }
 
 .host-details-cell {
@@ -1242,13 +1244,13 @@ tr:hover {
 }
 
 .log-sources-table th {
-    background-color: #f8f9fa;
+    background-color: #2d3748;
     padding: 8px 12px;
     text-align: left;
     font-size: 12px;
     font-weight: 600;
-    color: #495057;
-    border-bottom: 1px solid #dee2e6;
+    color: #e2e8f0;
+    border-bottom: 1px solid #4a5568;
 }
 
 .log-sources-table td {
@@ -1261,24 +1263,24 @@ tr:hover {
 .log-source-id {
     width: 80px;
     font-weight: 500;
-    color: #495057;
+    color: #e2e8f0;
 }
 
 .log-source-name {
     width: 200px;
     font-weight: 500;
-    color: #212529;
+    color: #e2e8f0;
 }
 
 .log-source-type {
     width: 150px;
-    color: #6c757d;
+    color: #a0aec0;
     font-style: italic;
 }
 
 .last-log-date {
     width: 120px;
-    color: #495057;
+    color: #e2e8f0;
 }
 
 .ping-result {
@@ -1288,7 +1290,20 @@ tr:hover {
 }
 
 .log-sources-table tr:hover {
-    background-color: #f8f9fa;
+    background-color: #4a5568;
+}
+
+.log-source-checkbox-cell {
+    width: 40px;
+    text-align: center;
+    padding: 8px 4px !important;
+}
+
+.log-source-checkbox-cell .checkbox-label {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
 }
 
 /* Collection Host Modal Styles */
@@ -1336,26 +1351,27 @@ tr:hover {
     align-items: center;
     margin-bottom: 20px;
     padding: 15px;
-    background: #f8f9fa;
+    background: #1a202c;
+    border: 1px solid #4a5568;
     border-radius: 8px;
 }
 
 .collection-host-summary {
     font-size: 14px;
-    color: #495057;
+    color: #e2e8f0;
 }
 
 .collection-host-list {
     max-height: 400px;
     overflow-y: auto;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #4a5568;
     border-radius: 8px;
     margin-bottom: 20px;
 }
 
 .collection-host-list .host-item {
     padding: 15px;
-    border-bottom: 1px solid #e2e8f0;
+    border-bottom: 1px solid #4a5568;
     transition: background-color 0.2s ease;
 }
 
@@ -1364,12 +1380,12 @@ tr:hover {
 }
 
 .collection-host-list .host-item:hover {
-    background-color: #f8f9fa;
+    background-color: #4a5568;
 }
 
 .collection-host-list .host-item.selected {
-    background-color: #e3f2fd;
-    border-left: 4px solid #2196f3;
+    background-color: #2d3748;
+    border-left: 4px solid #667eea;
 }
 
 .collection-host-list .host-info {
@@ -1384,7 +1400,7 @@ tr:hover {
 
 .collection-host-list .host-name {
     font-weight: 600;
-    color: #212529;
+    color: #e2e8f0;
     margin-bottom: 5px;
 }
 
@@ -1408,13 +1424,13 @@ tr:hover {
 .host-list {
     max-height: 400px;
     overflow-y: auto;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #4a5568;
     border-radius: 8px;
     margin-bottom: 20px;
 }
 
 .host-list .host-item {
-    border-bottom: 1px solid #e2e8f0;
+    border-bottom: 1px solid #4a5568;
     transition: background-color 0.2s ease;
 }
 
@@ -1423,12 +1439,12 @@ tr:hover {
 }
 
 .host-list .host-item:hover {
-    background-color: #f8f9fa;
+    background-color: #4a5568;
 }
 
 .host-list .host-item.selected {
-    background-color: #e3f2fd;
-    border-left: 4px solid #2196f3;
+    background-color: #2d3748;
+    border-left: 4px solid #667eea;
 }
 
 .host-list .host-info {
@@ -1451,7 +1467,7 @@ tr:hover {
 
 .host-list .host-name {
     font-weight: 600;
-    color: #212529;
+    color: #e2e8f0;
     min-width: 200px;
 }
 
@@ -1463,7 +1479,7 @@ tr:hover {
 }
 
 .host-list .max-log-date {
-    color: #6c757d;
+    color: #a0aec0;
     font-size: 14px;
 }
 
@@ -1477,7 +1493,7 @@ tr:hover {
 }
 
 .host-list .host-details-row {
-    background-color: #ffffff;
+    background-color: #1a202c;
     border-top: none;
 }
 
@@ -1492,13 +1508,13 @@ tr:hover {
 }
 
 .host-list .log-sources-table th {
-    background-color: #f8f9fa;
+    background-color: #2d3748;
     padding: 8px 12px;
     text-align: left;
     font-size: 12px;
     font-weight: 600;
-    color: #495057;
-    border-bottom: 1px solid #dee2e6;
+    color: #e2e8f0;
+    border-bottom: 1px solid #4a5568;
 }
 
 .host-list .log-sources-table td {
@@ -1509,7 +1525,7 @@ tr:hover {
 }
 
 .host-list .log-sources-table tr:hover {
-    background-color: #f8f9fa;
+    background-color: #4a5568;
 }
 
 .warning-content h4 {
@@ -1528,6 +1544,221 @@ tr:hover {
     display: flex;
     gap: 10px;
     justify-content: center;
+}
+
+/* Rollback Styles */
+.rollback-section {
+    padding: 20px;
+}
+
+.rollback-info {
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 20px;
+}
+
+.rollback-info p {
+    margin: 0;
+    color: #93c5fd;
+}
+
+.rollback-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.rollback-history {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.rollback-item {
+    background: rgba(30, 30, 46, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 20px;
+    transition: all 0.3s ease;
+}
+
+.rollback-item:hover {
+    background: rgba(30, 30, 46, 0.9);
+    border-color: rgba(59, 130, 246, 0.5);
+}
+
+.rollback-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 15px;
+}
+
+.rollback-info h4 {
+    color: #e2e8f0;
+    margin: 0 0 10px 0;
+    font-size: 1.1rem;
+}
+
+.rollback-meta {
+    display: flex;
+    gap: 20px;
+    font-size: 0.9rem;
+    color: #a0aec0;
+}
+
+.rollback-meta span {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.rollback-stats {
+    display: flex;
+    gap: 20px;
+}
+
+.rollback-stats .stat-item {
+    text-align: center;
+}
+
+.rollback-stats .stat-number {
+    display: block;
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #60a5fa;
+}
+
+.rollback-stats .stat-label {
+    display: block;
+    font-size: 0.8rem;
+    color: #a0aec0;
+    margin-top: 2px;
+}
+
+.rollback-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.no-rollbacks {
+    text-align: center;
+    padding: 40px;
+    color: #a0aec0;
+}
+
+.no-rollbacks i {
+    font-size: 3rem;
+    margin-bottom: 15px;
+    color: #4a5568;
+}
+
+.no-rollbacks p {
+    font-size: 1.1rem;
+    margin-bottom: 10px;
+}
+
+.no-rollbacks small {
+    color: #718096;
+}
+
+/* Rollback Preview Styles */
+.rollback-preview {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.preview-section {
+    margin-bottom: 20px;
+}
+
+.preview-section h4 {
+    color: #e2e8f0;
+    margin-bottom: 10px;
+    font-size: 1rem;
+}
+
+.preview-list {
+    background: rgba(30, 30, 46, 0.5);
+    border-radius: 6px;
+    padding: 10px;
+}
+
+.preview-item {
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.preview-item:last-child {
+    border-bottom: none;
+}
+
+.preview-item strong {
+    color: #e2e8f0;
+}
+
+.change-details {
+    margin-top: 5px;
+    font-size: 0.9rem;
+}
+
+.change-details .original {
+    color: #f56565;
+}
+
+.change-details .current {
+    color: #48bb78;
+}
+
+.preview-more {
+    text-align: center;
+    color: #a0aec0;
+    font-style: italic;
+    margin-top: 10px;
+}
+
+/* Rollback Configuration Styles */
+.rollback-config-content {
+    padding: 20px 0;
+}
+
+.rollback-config-content .form-group {
+    margin-bottom: 20px;
+}
+
+.rollback-config-content .form-group small {
+    display: block;
+    margin-top: 5px;
+    color: #a0aec0;
+    font-size: 0.85rem;
+}
+
+.rollback-config-content .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.rollback-config-content .checkbox-label input[type="checkbox"] {
+    margin: 0;
+}
+
+/* Loading message for rollback history */
+.loading-message {
+    text-align: center;
+    padding: 40px;
+    color: #a0aec0;
+}
+
+.loading-message i {
+    font-size: 2rem;
+    margin-bottom: 15px;
+    color: #60a5fa;
 }
 
 /* Backup Info Styles */
