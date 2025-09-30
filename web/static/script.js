@@ -848,9 +848,29 @@ function handleExport() {
     const link = document.createElement('a');
     link.href = `/api/export/${currentJobId}`;
     link.download = `lrcleaner_results_${currentJobId}.csv`;
+    console.log('Download URL:', link.href);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    
+    // Also try a direct fetch to see what the server returns
+    fetch(`/api/export/${currentJobId}`)
+        .then(response => {
+            console.log('Export response status:', response.status);
+            console.log('Export response headers:', response.headers);
+            if (!response.ok) {
+                console.error('Export failed:', response.status, response.statusText);
+                return response.text().then(text => {
+                    console.error('Error response body:', text);
+                });
+            }
+            return response.text().then(text => {
+                console.log('Export response preview:', text.substring(0, 200));
+            });
+        })
+        .catch(error => {
+            console.error('Export request failed:', error);
+        });
     
     showToast('Export started', 'success');
 }

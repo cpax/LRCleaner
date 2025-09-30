@@ -752,32 +752,76 @@ func handleExport(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	jobID := vars["jobId"]
 
+	log.Printf("Export request for job ID: %s", jobID)
+
 	jobsMutex.RLock()
 	job, exists := jobs[jobID]
 	jobsMutex.RUnlock()
 
 	if !exists {
+		log.Printf("Job not found: %s", jobID)
 		http.Error(w, "Job not found", http.StatusNotFound)
 		return
 	}
 
-	if len(job.Results) == 0 {
+	log.Printf("Job found: %s", jobID)
+	log.Printf("Results count: %d", len(job.Results))
+	log.Printf("HostAnalysis count: %d", len(job.HostAnalysis))
+	log.Printf("CollectionHostAnalysis count: %d", len(job.CollectionHostAnalysis))
+
+	// Check which results field has data
+	var resultsToExport []AnalysisResult
+	if len(job.Results) > 0 {
+		resultsToExport = job.Results
+		log.Printf("Using job.Results for export")
+	} else if len(job.HostAnalysis) > 0 {
+		// Convert HostAnalysis to AnalysisResult format
+		log.Printf("Converting HostAnalysis to export format")
+		for _, host := range job.HostAnalysis {
+			// For host analysis, we need to get the log sources from each host
+			for _, logSource := range host.LogSources {
+				resultsToExport = append(resultsToExport, AnalysisResult{
+					ID:            logSource.ID,
+					HostID:        host.HostID,
+					HostName:      host.HostName,
+					Name:          logSource.Name,
+					LogSourceType: logSource.LogSourceType.Name,
+					MaxLogDate:    host.MaxLogDate,
+					PingResult:    host.PingResult,
+				})
+			}
+		}
+	} else {
+		log.Printf("No results to export for job: %s", jobID)
+		http.Error(w, "No results to export", http.StatusBadRequest)
+		return
+	}
+
+	if len(resultsToExport) == 0 {
+		log.Printf("No results to export for job: %s", jobID)
 		http.Error(w, "No results to export", http.StatusBadRequest)
 		return
 	}
 
 	// Generate CSV with all log source details
 	csv := "LogSourceID,HostID,HostName,LogSourceName,LogSourceType,MaxLogDate,PingResult\n"
-	for _, result := range job.Results {
+	for _, result := range resultsToExport {
 		csv += fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s\n",
-			idToString(result.ID), 
-			idToString(result.HostID), 
-			result.HostName, 
+			idToString(result.ID),
+			idToString(result.HostID),
+			result.HostName,
 			result.Name,
 			result.LogSourceType,
-			result.MaxLogDate, 
+			result.MaxLogDate,
 			result.PingResult)
 	}
+
+	log.Printf("Generated CSV for job %s, length: %d bytes", jobID, len(csv))
+	previewLength := 200
+	if len(csv) < previewLength {
+		previewLength = len(csv)
+	}
+	log.Printf("CSV preview: %s", csv[:previewLength])
 
 	w.Header().Set("Content-Type", "text/csv")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"LRCleaner_Results_%s.csv\"", jobID))
