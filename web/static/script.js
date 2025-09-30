@@ -138,11 +138,6 @@ function showRollbackSection() {
     console.log('Showing rollback section');
 }
 
-function handleExport() {
-    // TODO: Implement export functionality
-    console.log('Export functionality not yet implemented');
-    alert('Export functionality will be implemented soon!');
-}
 
 function handleRetirement() {
     // TODO: Implement retirement functionality

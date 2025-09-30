@@ -766,11 +766,17 @@ func handleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate CSV
-	csv := "ID,HostID,HostName,MaxLogDate,PingResult\n"
+	// Generate CSV with all log source details
+	csv := "LogSourceID,HostID,HostName,LogSourceName,LogSourceType,MaxLogDate,PingResult\n"
 	for _, result := range job.Results {
-		csv += fmt.Sprintf("%s,%s,%s,%s,%s\n",
-			idToString(result.ID), idToString(result.HostID), result.HostName, result.MaxLogDate, result.PingResult)
+		csv += fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s\n",
+			idToString(result.ID), 
+			idToString(result.HostID), 
+			result.HostName, 
+			result.Name,
+			result.LogSourceType,
+			result.MaxLogDate, 
+			result.PingResult)
 	}
 
 	w.Header().Set("Content-Type", "text/csv")
