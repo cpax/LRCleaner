@@ -149,6 +149,7 @@ type HostRollback struct {
 	OriginalName        string           `json:"originalName"`
 	OriginalStatus      string           `json:"originalStatus"`
 	OriginalIdentifiers []HostIdentifier `json:"originalIdentifiers"`
+	RetiredIdentifiers  []HostIdentifier `json:"retiredIdentifiers"` // Only identifiers that were actually retired
 	CurrentName         string           `json:"currentName"`
 	CurrentStatus       string           `json:"currentStatus"`
 }
@@ -192,11 +193,12 @@ type JobStatus struct {
 
 // Global variables
 var (
-	config     *Config
-	httpClient *http.Client
-	jobs       = make(map[string]*JobStatus)
-	jobsMutex  sync.RWMutex
-	upgrader   = websocket.Upgrader{
+	config                *Config
+	httpClient            *http.Client
+	removedIdentifiersMap = make(map[string][]HostIdentifier) // Track removed identifiers by host ID
+	jobs                  = make(map[string]*JobStatus)
+	jobsMutex             sync.RWMutex
+	upgrader              = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
 			return true // Allow all origins for local development
 		},
@@ -282,12 +284,73 @@ func openBrowser(url string) {
 	}
 }
 
+func loadRollbackFiles() {
+	rollbackDir := config.Rollback.BackupLocation
+	if rollbackDir == "" {
+		rollbackDir = "./rollback/"
+	}
+
+	// Check if rollback directory exists
+	if _, err := os.Stat(rollbackDir); os.IsNotExist(err) {
+		log.Printf("Rollback directory does not exist: %s", rollbackDir)
+		return
+	}
+
+	// Read all JSON files in the rollback directory
+	files, err := filepath.Glob(filepath.Join(rollbackDir, "*.json"))
+	if err != nil {
+		log.Printf("Error reading rollback directory: %v", err)
+		return
+	}
+
+	log.Printf("Found %d rollback files to load", len(files))
+
+	loadedCount := 0
+	for _, file := range files {
+		// Read the file
+		data, err := os.ReadFile(file)
+		if err != nil {
+			log.Printf("Error reading rollback file %s: %v", file, err)
+			continue
+		}
+
+		// Parse the rollback data
+		var rollbackData RollbackData
+		if err := json.Unmarshal(data, &rollbackData); err != nil {
+			log.Printf("Error parsing rollback file %s: %v", file, err)
+			continue
+		}
+
+		// Verify checksum if present
+		if rollbackData.Checksum != "" {
+			expectedChecksum := calculateChecksum(data)
+			if rollbackData.Checksum != expectedChecksum {
+				log.Printf("Checksum mismatch for rollback file %s, skipping", file)
+				continue
+			}
+		}
+
+		// Store in memory
+		rollbackMutex.Lock()
+		rollbackHistory[rollbackData.ID] = &rollbackData
+		rollbackMutex.Unlock()
+
+		loadedCount++
+		log.Printf("Loaded rollback file: %s (ID: %s)", file, rollbackData.ID)
+	}
+
+	log.Printf("Successfully loaded %d rollback files", loadedCount)
+}
+
 func main() {
 	// Find available port
 	port := findAvailablePort()
 
 	// Initialize configuration
 	config = loadConfig()
+
+	// Load existing rollback files
+	loadRollbackFiles()
 
 	// Setup HTTP client with custom transport
 	httpClient = &http.Client{
@@ -1793,9 +1856,13 @@ func executeRetirement(jobID string, selectedHosts []string) {
 			// Step 3: Retire the host
 			log.Printf("=== STEP 3: HOST RETIREMENT ===")
 			log.Printf("DEBUG: About to retire host %s", hostID)
-			if updateHost(hostID) {
+			success, removedIdentifiers := updateHost(hostID)
+			if success {
 				retiredHosts++
+				// Store the removed identifiers for rollback data
+				removedIdentifiersMap[idToString(hostID)] = removedIdentifiers
 				log.Printf("  ✓ Successfully retired host: %s", hostID)
+				log.Printf("  ✓ Removed %d identifiers from host: %s", len(removedIdentifiers), hostID)
 				log.Printf("DEBUG: Host %s retirement completed successfully", hostID)
 			} else {
 				log.Printf("  ✗ Failed to retire host: %s", hostID)
@@ -2236,14 +2303,14 @@ func retireSystemMonitor(systemMonitorID interface{}) bool {
 	}
 }
 
-func removeHostIdentifiers(hostID interface{}) bool {
+func removeHostIdentifiers(hostID interface{}) []HostIdentifier {
 	// First, GET the host to get all identifiers
 	getURL := fmt.Sprintf("https://%s:%d/lr-admin-api/hosts/%s", config.Hostname, config.Port, idToString(hostID))
 
 	req, err := http.NewRequest("GET", getURL, nil)
 	if err != nil {
 		log.Printf("Error creating GET request for host %s: %v", idToString(hostID), err)
-		return false
+		return []HostIdentifier{}
 	}
 
 	req.Header.Set("Authorization", "Bearer "+config.APIKey)
@@ -2252,33 +2319,33 @@ func removeHostIdentifiers(hostID interface{}) bool {
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Printf("Error getting host %s: %v", idToString(hostID), err)
-		return false
+		return []HostIdentifier{}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("Failed to get host %s, status: %d", idToString(hostID), resp.StatusCode)
-		return false
+		return []HostIdentifier{}
 	}
 
 	// Parse the response to get identifiers
 	var host map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&host); err != nil {
 		log.Printf("Error decoding host %s: %v", idToString(hostID), err)
-		return false
+		return []HostIdentifier{}
 	}
 
 	// Check if host has identifiers (note: it's "hostIdentifiers" not "identifiers")
 	hostIdentifiers, hasIdentifiers := host["hostIdentifiers"]
 	if !hasIdentifiers {
 		log.Printf("Host %s has no identifiers to remove", idToString(hostID))
-		return true // Success - no identifiers to remove
+		return []HostIdentifier{} // Success - no identifiers to remove
 	}
 
 	identifiersArray, ok := hostIdentifiers.([]interface{})
 	if !ok || len(identifiersArray) == 0 {
 		log.Printf("Host %s has no identifiers to remove", idToString(hostID))
-		return true // Success - no identifiers to remove
+		return []HostIdentifier{} // Success - no identifiers to remove
 	}
 
 	// Find IPAddress identifiers to remove (skip those already retired)
@@ -2307,19 +2374,25 @@ func removeHostIdentifiers(hostID interface{}) bool {
 
 	if len(ipAddressIdentifiers) == 0 {
 		log.Printf("Host %s has no IPAddress identifiers to remove", idToString(hostID))
-		return true // Success - no IPAddress identifiers to remove
+		return []HostIdentifier{} // Success - no IPAddress identifiers to remove
 	}
 
 	log.Printf("Host %s has %d IPAddress identifiers to remove", idToString(hostID), len(ipAddressIdentifiers))
 
 	// Create payload for removing IPAddress identifiers with their actual IP address values
 	var hostIdentifiersPayload []map[string]interface{}
+	var removedIdentifiers []HostIdentifier
 	for _, identifier := range ipAddressIdentifiers {
 		ipAddress, hasValue := identifier["value"]
 		if hasValue {
 			hostIdentifiersPayload = append(hostIdentifiersPayload, map[string]interface{}{
 				"type":  "IPAddress",
 				"value": ipAddress, // Use the actual IP address value, not the hostIdentifierId
+			})
+			// Track the identifiers that will be removed for rollback
+			removedIdentifiers = append(removedIdentifiers, HostIdentifier{
+				Type:  "IPAddress",
+				Value: ipAddress.(string),
 			})
 		}
 	}
@@ -2331,7 +2404,7 @@ func removeHostIdentifiers(hostID interface{}) bool {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("Error marshaling identifier removal payload for host %s: %v", idToString(hostID), err)
-		return false
+		return []HostIdentifier{}
 	}
 
 	// DELETE the IPAddress identifiers
@@ -2344,7 +2417,7 @@ func removeHostIdentifiers(hostID interface{}) bool {
 	req, err = http.NewRequest("DELETE", deleteURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		log.Printf("Error creating DELETE request for host identifiers %s: %v", idToString(hostID), err)
-		return false
+		return []HostIdentifier{}
 	}
 
 	req.Header.Set("Authorization", "Bearer "+config.APIKey)
@@ -2353,7 +2426,7 @@ func removeHostIdentifiers(hostID interface{}) bool {
 	resp, err = httpClient.Do(req)
 	if err != nil {
 		log.Printf("Error removing IPAddress identifiers from host %s: %v", idToString(hostID), err)
-		return false
+		return []HostIdentifier{}
 	}
 	defer resp.Body.Close()
 
@@ -2363,19 +2436,19 @@ func removeHostIdentifiers(hostID interface{}) bool {
 	log.Printf("DELETE Response Body: %s", string(bodyBytes))
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
-		log.Printf("Successfully removed %d IPAddress identifiers from host %s", len(ipAddressIdentifiers), idToString(hostID))
-		return true
+		log.Printf("Successfully removed %d IPAddress identifiers from host %s", len(removedIdentifiers), idToString(hostID))
+		return removedIdentifiers
 	} else {
 		log.Printf("Failed to remove IPAddress identifiers from host %s, status: %d", idToString(hostID), resp.StatusCode)
-		return false
+		return []HostIdentifier{} // Return empty list on failure
 	}
 }
 
-func updateHost(hostID interface{}) bool {
+func updateHost(hostID interface{}) (bool, []HostIdentifier) {
 	// First, remove all identifiers from the host
-	if !removeHostIdentifiers(hostID) {
-		log.Printf("Failed to remove identifiers from host %s, skipping host retirement", idToString(hostID))
-		return false
+	removedIdentifiers := removeHostIdentifiers(hostID)
+	if len(removedIdentifiers) == 0 {
+		log.Printf("No identifiers were removed from host %s", idToString(hostID))
 	}
 
 	// Use the correct LogRhythm API for retiring hosts
@@ -2386,7 +2459,7 @@ func updateHost(hostID interface{}) bool {
 	getReq, err := http.NewRequest("GET", hostURL, nil)
 	if err != nil {
 		log.Printf("Error creating GET request for host %s: %v", idToString(hostID), err)
-		return false
+		return false, []HostIdentifier{}
 	}
 
 	getReq.Header.Set("Authorization", "Bearer "+config.APIKey)
@@ -2395,26 +2468,26 @@ func updateHost(hostID interface{}) bool {
 	getResp, err := httpClient.Do(getReq)
 	if err != nil {
 		log.Printf("Error getting host %s: %v", idToString(hostID), err)
-		return false
+		return false, []HostIdentifier{}
 	}
 	defer getResp.Body.Close()
 
 	if getResp.StatusCode != http.StatusOK {
 		log.Printf("Failed to get host %s, status: %d", idToString(hostID), getResp.StatusCode)
-		return false
+		return false, []HostIdentifier{}
 	}
 
 	// Parse the response
 	var host map[string]interface{}
 	if err := json.NewDecoder(getResp.Body).Decode(&host); err != nil {
 		log.Printf("Error decoding host %s: %v", idToString(hostID), err)
-		return false
+		return false, []HostIdentifier{}
 	}
 
 	// Check if host is already retired
 	if recordStatusName, ok := host["recordStatusName"].(string); ok && recordStatusName == "Retired" {
 		log.Printf("Host %s is already retired, skipping retirement", idToString(hostID))
-		return true // Success - already retired
+		return true, []HostIdentifier{} // Success - already retired
 	}
 
 	// Update the recordStatusName to "Retired"
@@ -2436,7 +2509,7 @@ func updateHost(hostID interface{}) bool {
 	jsonData, err := json.Marshal(host)
 	if err != nil {
 		log.Printf("Error marshaling updated host %s: %v", idToString(hostID), err)
-		return false
+		return false, []HostIdentifier{}
 	}
 
 	log.Printf("PUT Request Data for host %s: %s", idToString(hostID), string(jsonData))
@@ -2444,7 +2517,7 @@ func updateHost(hostID interface{}) bool {
 	req, err := http.NewRequest("PUT", hostURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		log.Printf("Error creating PUT request for host %s: %v", idToString(hostID), err)
-		return false
+		return false, []HostIdentifier{}
 	}
 
 	req.Header.Set("Authorization", "Bearer "+config.APIKey)
@@ -2453,7 +2526,7 @@ func updateHost(hostID interface{}) bool {
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Printf("Error updating host %s: %v", idToString(hostID), err)
-		return false
+		return false, []HostIdentifier{}
 	}
 	defer resp.Body.Close()
 
@@ -2464,10 +2537,10 @@ func updateHost(hostID interface{}) bool {
 
 	if resp.StatusCode == http.StatusOK {
 		log.Printf("Successfully retired host %s", idToString(hostID))
-		return true
+		return true, removedIdentifiers
 	} else {
 		log.Printf("Failed to update host %s, status: %d", idToString(hostID), resp.StatusCode)
-		return false
+		return false, []HostIdentifier{}
 	}
 }
 
@@ -2667,17 +2740,28 @@ func createRollbackData(jobID string, selectedHosts []string) *RollbackData {
 	for _, host := range hostsToRetire {
 		// Get original host data
 		originalHostData := getHostData(host.HostID)
+
+		// Get the actually removed identifiers from the retirement process
+		removedIdentifiers := removedIdentifiersMap[idToString(host.HostID)]
+		if removedIdentifiers == nil {
+			removedIdentifiers = []HostIdentifier{} // Default to empty if not found
+		}
+
 		hostChange := HostRollback{
 			HostID:              host.HostID,
 			HostName:            host.HostName,
 			OriginalName:        originalHostData["name"].(string),
 			OriginalStatus:      originalHostData["recordStatusName"].(string),
 			OriginalIdentifiers: extractHostIdentifiers(originalHostData),
+			RetiredIdentifiers:  removedIdentifiers,                            // Only the identifiers that were actually removed
 			CurrentName:         originalHostData["name"].(string),             // Will be updated after retirement
 			CurrentStatus:       originalHostData["recordStatusName"].(string), // Will be updated after retirement
 		}
 		rollbackData.HostChanges = append(rollbackData.HostChanges, hostChange)
 	}
+
+	// Clear the removed identifiers map after creating rollback data
+	removedIdentifiersMap = make(map[string][]HostIdentifier)
 
 	return rollbackData
 }
@@ -2735,6 +2819,37 @@ func extractHostIdentifiers(hostData map[string]interface{}) []HostIdentifier {
 							Type:  identifierType,
 							Value: identifierValue,
 						})
+					}
+				}
+			}
+		}
+	}
+
+	return identifiers
+}
+
+// extractRetiredIPIdentifiers extracts only IP address identifiers that were actually retired
+// and removes duplicates
+func extractRetiredIPIdentifiers(hostData map[string]interface{}) []HostIdentifier {
+	var identifiers []HostIdentifier
+	seenValues := make(map[string]bool) // Track seen values to remove duplicates
+
+	if hostIdentifiers, ok := hostData["hostIdentifiers"].([]interface{}); ok {
+		for _, identifier := range hostIdentifiers {
+			if identifierMap, ok := identifier.(map[string]interface{}); ok {
+				if identifierType, hasType := identifierMap["type"].(string); hasType {
+					if identifierValue, hasValue := identifierMap["value"].(string); hasValue {
+						// Only include IPAddress identifiers
+						if identifierType == "IPAddress" {
+							// Skip duplicates
+							if !seenValues[identifierValue] {
+								seenValues[identifierValue] = true
+								identifiers = append(identifiers, HostIdentifier{
+									Type:  identifierType,
+									Value: identifierValue,
+								})
+							}
+						}
 					}
 				}
 			}
@@ -3030,17 +3145,9 @@ func rollbackHost(change HostRollback) bool {
 		host["name"] = strings.Replace(host["name"].(string), " Retired by LRCleaner", "", 1)
 	}
 
-	// Restore original identifiers
-	if len(change.OriginalIdentifiers) > 0 {
-		var identifiers []map[string]interface{}
-		for _, identifier := range change.OriginalIdentifiers {
-			identifiers = append(identifiers, map[string]interface{}{
-				"type":  identifier.Type,
-				"value": identifier.Value,
-			})
-		}
-		host["hostIdentifiers"] = identifiers
-	}
+	// Remove hostIdentifiers from the main host update request
+	// We'll add them back using the correct API endpoint after the host is updated
+	delete(host, "hostIdentifiers")
 
 	// Remove fields that are not allowed in PUT request or might cause validation issues
 	delete(host, "hostRoles")
@@ -3082,6 +3189,17 @@ func rollbackHost(change HostRollback) bool {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
+		log.Printf("Successfully updated host %s", idToString(change.HostID))
+
+		// Now restore the retired identifiers using the correct API endpoint
+		if len(change.RetiredIdentifiers) > 0 {
+			if restoreHostIdentifiers(change.HostID, change.RetiredIdentifiers) {
+				log.Printf("Successfully restored %d identifiers for host %s", len(change.RetiredIdentifiers), idToString(change.HostID))
+			} else {
+				log.Printf("Failed to restore identifiers for host %s, but host was updated successfully", idToString(change.HostID))
+			}
+		}
+
 		log.Printf("Successfully rolled back host %s", idToString(change.HostID))
 		return true
 	} else {
@@ -3092,6 +3210,67 @@ func rollbackHost(change HostRollback) bool {
 		} else {
 			log.Printf("Failed to rollback host %s, status: %d, response: %s", idToString(change.HostID), resp.StatusCode, string(body))
 		}
+		return false
+	}
+}
+
+// restoreHostIdentifiers adds back the retired identifiers to a host
+func restoreHostIdentifiers(hostID interface{}, identifiers []HostIdentifier) bool {
+	if len(identifiers) == 0 {
+		return true // Nothing to restore
+	}
+
+	// Create payload for adding identifiers
+	var hostIdentifiersPayload []map[string]interface{}
+	for _, identifier := range identifiers {
+		hostIdentifiersPayload = append(hostIdentifiersPayload, map[string]interface{}{
+			"type":  identifier.Type,
+			"value": identifier.Value,
+		})
+	}
+
+	payload := map[string]interface{}{
+		"hostIdentifiers": hostIdentifiersPayload,
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("Error marshaling host identifiers payload for host %s: %v", idToString(hostID), err)
+		return false
+	}
+
+	// Use the correct LogRhythm API endpoint for updating host identifiers
+	url := fmt.Sprintf("https://%s:%d/lr-admin-api/hosts/%s/identifiers", config.Hostname, config.Port, idToString(hostID))
+
+	log.Printf("POST URL: %s", url)
+	log.Printf("POST Payload: %s", string(jsonData))
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Error creating POST request for host identifiers %s: %v", idToString(hostID), err)
+		return false
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("Error adding identifiers to host %s: %v", idToString(hostID), err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	// Read response body for debugging
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	log.Printf("POST Response Status: %d", resp.StatusCode)
+	log.Printf("POST Response Body: %s", string(bodyBytes))
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+		log.Printf("Successfully added %d identifiers to host %s", len(identifiers), idToString(hostID))
+		return true
+	} else {
+		log.Printf("Failed to add identifiers to host %s, status: %d", idToString(hostID), resp.StatusCode)
 		return false
 	}
 }

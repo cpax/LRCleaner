@@ -90,13 +90,15 @@ function navigateToSection(navId) {
 }
 
 function showAnalysisSection() {
-    // Hide settings section and show analysis section
+    // Hide settings section and rollback section, show analysis section
     const settingsSection = document.getElementById('settingsSection');
     const analysisSection = document.getElementById('analysisSection');
+    const rollbackSection = document.getElementById('rollbackSection');
     const controlSection = document.querySelector('.control-section');
     const resultsSection = document.querySelector('.results-section');
     
     if (settingsSection) settingsSection.style.display = 'none';
+    if (rollbackSection) rollbackSection.style.display = 'none';
     if (analysisSection) analysisSection.style.display = 'block';
     if (controlSection) controlSection.style.display = 'block';
     if (resultsSection) resultsSection.style.display = 'block';
@@ -105,7 +107,7 @@ function showAnalysisSection() {
 }
 
 function showSettingsSection() {
-    // Hide analysis section and show settings section
+    // Hide analysis section and rollback section, show settings section
     const settingsSection = document.getElementById('settingsSection');
     const analysisSection = document.getElementById('analysisSection');
     const rollbackSection = document.getElementById('rollbackSection');
@@ -695,8 +697,12 @@ function showMainContent() {
     console.log('showMainContent called');
     document.getElementById('mainContent').style.display = 'block';
     const settingsSection = document.getElementById('settingsSection');
+    const rollbackSection = document.getElementById('rollbackSection');
     if (settingsSection) {
         settingsSection.style.display = 'none';
+    }
+    if (rollbackSection) {
+        rollbackSection.style.display = 'none';
     }
     console.log('Main content should now be visible');
 }
@@ -711,10 +717,12 @@ function showSettingsSection() {
         settingsSection.style.display = 'block';
         // Hide other sections
         const analysisSection = document.getElementById('analysisSection');
+        const rollbackSection = document.getElementById('rollbackSection');
         const controlSection = document.querySelector('.control-section');
         const resultsSection = document.querySelector('.results-section');
         
         if (analysisSection) analysisSection.style.display = 'none';
+        if (rollbackSection) rollbackSection.style.display = 'none';
         if (controlSection) controlSection.style.display = 'none';
         if (resultsSection) resultsSection.style.display = 'none';
     } else {
@@ -1074,7 +1082,7 @@ function populateHostFilterDropdowns(uniqueLogSourceTypes, uniqueLogSourceNames)
     const logSourceTypeFilter = document.getElementById('hostLogSourceTypeFilter');
     if (logSourceTypeFilter) {
         // Clear existing options except the first one
-        logSourceTypeFilter.innerHTML = '<option value="">All Log Source Types</option>';
+        logSourceTypeFilter.innerHTML = '<option value="">Log Source Types</option>';
         Array.from(uniqueLogSourceTypes).sort().forEach(type => {
             const option = document.createElement('option');
             option.value = type;
@@ -1087,7 +1095,7 @@ function populateHostFilterDropdowns(uniqueLogSourceTypes, uniqueLogSourceNames)
     const logSourceNameFilter = document.getElementById('hostLogSourceNameFilter');
     if (logSourceNameFilter) {
         // Clear existing options except the first one
-        logSourceNameFilter.innerHTML = '<option value="">All Log Source Names</option>';
+        logSourceNameFilter.innerHTML = '<option value="">Host Names</option>';
         Array.from(uniqueLogSourceNames).sort().forEach(name => {
             const option = document.createElement('option');
             option.value = name;
@@ -1125,10 +1133,13 @@ function filterHostResults() {
             
             if (host && host.logSources) {
                 if (logSourceTypeFilter) {
-                    matchesLogSourceType = host.logSources.some(source => source.logSourceType === logSourceTypeFilter);
+                    matchesLogSourceType = host.logSources.some(source => {
+                        const sourceType = typeof source.logSourceType === 'string' ? source.logSourceType : source.logSourceType?.name;
+                        return sourceType === logSourceTypeFilter;
+                    });
                 }
                 if (logSourceNameFilter) {
-                    matchesLogSourceName = host.logSources.some(source => source.name === logSourceNameFilter);
+                    matchesLogSourceName = host.hostName === logSourceNameFilter;
                 }
             }
             
@@ -1138,7 +1149,8 @@ function filterHostResults() {
             // Also hide/show the corresponding details row
             const detailsRow = item.nextElementSibling;
             if (detailsRow && detailsRow.classList.contains('host-details-row')) {
-                detailsRow.style.display = shouldShow ? 'none' : 'none'; // Always hide details when filtering
+                // Keep details row hidden initially, but allow expansion if host is shown
+                detailsRow.style.display = 'none';
             }
         }
         // Handle host details rows (expandable content)
@@ -1311,10 +1323,14 @@ function updateResultsTable() {
         
         // Collect unique values for filters
         if (result.logSourceType) {
-            uniqueLogSourceTypes.add(result.logSourceType);
+            const typeName = typeof result.logSourceType === 'string' ? result.logSourceType : result.logSourceType.name;
+            if (typeName) {
+                uniqueLogSourceTypes.add(typeName);
+            }
         }
-        if (result.name) {
-            uniqueLogSourceNames.add(result.name);
+        // Collect host names instead of log source names
+        if (result.hostName) {
+            uniqueLogSourceNames.add(result.hostName);
         }
     });
     
@@ -1417,27 +1433,27 @@ function filterResults() {
         
         // Handle host summary rows (expandable rows)
         if (row.classList.contains('host-summary-row')) {
-            const hostName = row.querySelector('.host-name')?.textContent.toLowerCase() || '';
+            const hostName = row.querySelector('.host-name')?.textContent || '';
             const pingStatus = row.querySelector('.ping-status')?.textContent || '';
             const logSourceCount = row.querySelector('.log-source-count')?.textContent.toLowerCase() || '';
             
-            // Get the host group data for this row
-            const hostId = row.querySelector('.host-summary-content')?.onclick?.toString().match(/toggleHostDetails\('(host-\d+)'\)/)?.[1];
-            const hostGroup = getHostGroupByHostId(hostId);
-            
-            const matchesSearch = hostName.includes(searchTerm) || logSourceCount.includes(searchTerm);
+            const matchesSearch = hostName.toLowerCase().includes(searchTerm) || logSourceCount.includes(searchTerm);
             const matchesPing = !pingFilter || pingStatus === pingFilter;
             
-            // Check if any log source in this host matches the type/name filters
-            let matchesLogSourceType = !logSourceTypeFilter;
-            let matchesLogSourceName = !logSourceNameFilter;
+            // For host name filter, directly compare with the host name in the row
+            const matchesLogSourceName = !logSourceNameFilter || hostName === logSourceNameFilter;
             
-            if (hostGroup && hostGroup.logSources) {
-                if (logSourceTypeFilter) {
-                    matchesLogSourceType = hostGroup.logSources.some(source => source.logSourceType === logSourceTypeFilter);
-                }
-                if (logSourceNameFilter) {
-                    matchesLogSourceName = hostGroup.logSources.some(source => source.name === logSourceNameFilter);
+            // For log source type filter, we need to check if any log source in this host matches
+            let matchesLogSourceType = !logSourceTypeFilter;
+            if (logSourceTypeFilter) {
+                // Get the host group data for this row
+                const hostId = row.querySelector('.host-summary-content')?.onclick?.toString().match(/toggleHostDetails\('(host-\d+)'\)/)?.[1];
+                const hostGroup = getHostGroupByHostId(hostId);
+                if (hostGroup && hostGroup.logSources) {
+                    matchesLogSourceType = hostGroup.logSources.some(source => {
+                        const sourceType = typeof source.logSourceType === 'string' ? source.logSourceType : source.logSourceType?.name;
+                        return sourceType === logSourceTypeFilter;
+                    });
                 }
             }
             
@@ -1447,7 +1463,8 @@ function filterResults() {
             // Also hide/show the corresponding details row
             const detailsRow = row.nextElementSibling;
             if (detailsRow && detailsRow.classList.contains('host-details-row')) {
-                detailsRow.style.display = shouldShow ? 'none' : 'none'; // Always hide details when filtering
+                // Keep details row hidden initially, but allow expansion if host is shown
+                detailsRow.style.display = 'none';
             }
         }
         // Handle host details rows (expandable content)
@@ -1462,7 +1479,7 @@ function filterResults() {
 function populateFilterDropdowns(uniqueLogSourceTypes, uniqueLogSourceNames) {
     // Populate log source type filter
     const logSourceTypeFilter = document.getElementById('logSourceTypeFilter');
-    logSourceTypeFilter.innerHTML = '<option value="">All Log Source Types</option>';
+    logSourceTypeFilter.innerHTML = '<option value="">Log Source Types</option>';
     
     Array.from(uniqueLogSourceTypes).sort().forEach(type => {
         const option = document.createElement('option');
@@ -1473,7 +1490,7 @@ function populateFilterDropdowns(uniqueLogSourceTypes, uniqueLogSourceNames) {
     
     // Populate log source name filter
     const logSourceNameFilter = document.getElementById('logSourceNameFilter');
-    logSourceNameFilter.innerHTML = '<option value="">All Log Source Names</option>';
+    logSourceNameFilter.innerHTML = '<option value="">Host Names</option>';
     
     Array.from(uniqueLogSourceNames).sort().forEach(name => {
         const option = document.createElement('option');
@@ -1663,10 +1680,14 @@ function updateResultsTableForApplyMode() {
         // Collect unique values for filters
         host.logSources.forEach(logSource => {
             if (logSource.logSourceType) {
-                uniqueLogSourceTypes.add(logSource.logSourceType);
+                const typeName = typeof logSource.logSourceType === 'string' ? logSource.logSourceType : logSource.logSourceType.name;
+                if (typeName) {
+                    uniqueLogSourceTypes.add(typeName);
+                }
             }
-            if (logSource.name) {
-                uniqueLogSourceNames.add(logSource.name);
+            // Collect host names instead of log source names
+            if (host.hostName) {
+                uniqueLogSourceNames.add(host.hostName);
             }
         });
     });
@@ -1768,10 +1789,14 @@ function populateHostList() {
         // Collect unique values for filters
         host.logSources.forEach(logSource => {
             if (logSource.logSourceType) {
-                uniqueLogSourceTypes.add(logSource.logSourceType);
+                const typeName = typeof logSource.logSourceType === 'string' ? logSource.logSourceType : logSource.logSourceType.name;
+                if (typeName) {
+                    uniqueLogSourceTypes.add(typeName);
+                }
             }
-            if (logSource.name) {
-                uniqueLogSourceNames.add(logSource.name);
+            // Collect host names instead of log source names
+            if (host.hostName) {
+                uniqueLogSourceNames.add(host.hostName);
             }
         });
     });
