@@ -6,9 +6,11 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -29,6 +31,10 @@ import (
 	"github.com/gorilla/websocket"
 	_ "github.com/microsoft/go-mssqldb"
 )
+
+// Embedded web files
+//go:embed web/*
+var webFiles embed.FS
 
 // Configuration structure
 type Config struct {
@@ -451,7 +457,8 @@ func main() {
 	router := mux.NewRouter()
 
 	// Static files (embedded web UI)
-	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./web/static/"))))
+	staticFS, _ := fs.Sub(webFiles, "web/static")
+	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	router.HandleFunc("/", serveIndex)
 
 	// API routes
@@ -594,7 +601,13 @@ func loadConfig() *Config {
 }
 
 func serveIndex(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "./web/index.html")
+	data, err := webFiles.ReadFile("web/index.html")
+	if err != nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html")
+	w.Write(data)
 }
 
 // ConfigResponse represents the response structure for config API
