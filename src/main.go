@@ -2613,6 +2613,12 @@ func removeHostIdentifiers(hostID interface{}) []HostIdentifier {
 		}
 	}
 
+	// Check if we have any identifiers to remove
+	if len(hostIdentifiersPayload) == 0 {
+		log.Printf("Host %s has no IPAddress identifiers to remove (empty payload)", idToString(hostID))
+		return []HostIdentifier{} // Success - no identifiers to remove
+	}
+
 	payload := map[string]interface{}{
 		"hostIdentifiers": hostIdentifiersPayload,
 	}
