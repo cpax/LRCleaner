@@ -12,6 +12,7 @@ let selectedCollectionHosts = [];
 
 // Debug: Check if script is loading
 console.log('LRCleaner script loaded - version 2');
+console.log('Script execution started');
 
 // Sidebar functionality
 function toggleSidebar() {
@@ -96,6 +97,7 @@ function showAnalysisSection() {
     const rollbackSection = document.getElementById('rollbackSection');
     const controlSection = document.querySelector('.control-section');
     const resultsSection = document.querySelector('.results-section');
+    const progressSection = document.getElementById('progressSection');
     
     if (settingsSection) settingsSection.style.display = 'none';
     if (rollbackSection) rollbackSection.style.display = 'none';
@@ -103,6 +105,7 @@ function showAnalysisSection() {
     if (controlSection) controlSection.style.display = 'block';
     if (resultsSection) resultsSection.style.display = 'block';
     
+    // Don't automatically show progress section - let it be controlled by showProgressSection()
     console.log('Showing analysis section');
 }
 
@@ -182,10 +185,13 @@ function handleBackupSkip() {
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('DOM Content Loaded - initializing app');
     initializeApp();
 });
 
 function initializeApp() {
+    console.log('initializeApp called');
+    
     // Set default date to today
     const today = new Date().toISOString().split('T')[0];
     const testDateElement = document.getElementById('testDate');
@@ -208,14 +214,23 @@ function initializeApp() {
     loadConfiguration();
     
     // Setup event listeners
+    console.log('Setting up event listeners...');
     setupEventListeners();
     
     // Connect to WebSocket
     console.log('About to connect to WebSocket...');
     connectWebSocket();
+    
+    console.log('initializeApp completed');
+    
+    // Make showProgressSection available globally for testing
+    window.testShowProgress = showProgressSection;
+    window.testHideProgress = hideProgressSection;
 }
 
 function setupEventListeners() {
+    console.log('setupEventListeners called');
+    
     // Sidebar toggle
     const sidebarToggle = document.getElementById('sidebarToggle');
     if (sidebarToggle) {
@@ -276,8 +291,25 @@ function setupEventListeners() {
     document.getElementById('configForm').addEventListener('submit', handleConfigSubmit);
     
     // Test connection button
-    document.getElementById('testConnectionBtn').addEventListener('click', handleTestConnection);
+    try {
+        const testConnectionBtn = document.getElementById('testConnectionBtn');
+        console.log('Looking for test connection button, found:', testConnectionBtn);
+        if (testConnectionBtn) {
+            console.log('Found test connection button, adding event listener');
+            testConnectionBtn.addEventListener('click', function(e) {
+                console.log('Test connection button clicked!');
+                e.preventDefault();
+                handleTestConnection();
+            });
+            console.log('Event listener added successfully');
+        } else {
+            console.error('Test connection button not found!');
+        }
+    } catch (error) {
+        console.error('Error setting up test connection button:', error);
+    }
     document.getElementById('clearApiKeyBtn').addEventListener('click', handleClearApiKey);
+    document.getElementById('toggleApiKeyVisibility').addEventListener('click', handleToggleApiKeyVisibility);
     document.querySelector('.api-key-info').addEventListener('click', handleApiKeyInfoClick);
     
     // Control buttons
@@ -600,8 +632,19 @@ function handleConfigSubmit(e) {
         return;
     }
     
-    if (!config.apiKey || config.apiKey.length < 10) {
+    // Only validate API key if it's provided and not already stored
+    if (config.apiKey && config.apiKey !== '***STORED***' && config.apiKey.length < 10) {
         showToast('API key must be at least 10 characters', 'error');
+        isSubmittingConfig = false;
+        return;
+    }
+    
+    // Check if we have a stored API key or a valid new one
+    const hasStoredKey = config.apiKey === '***STORED***';
+    const hasValidNewKey = config.apiKey && config.apiKey !== '***STORED***' && config.apiKey.length >= 10;
+    
+    if (!hasStoredKey && !hasValidNewKey) {
+        showToast('API key is required', 'error');
         isSubmittingConfig = false;
         return;
     }
@@ -638,7 +681,20 @@ function handleConfigSubmit(e) {
         showToast('Configuration saved successfully!', 'success');
         const applyModeBtn = document.getElementById('applyModeBtn');
         if (applyModeBtn) applyModeBtn.disabled = false;
-        showMainContent();
+        
+        // Update UI to show stored API key state
+        const apiKeyInput = document.getElementById('apiKey');
+        const clearApiKeyBtn = document.getElementById('clearApiKeyBtn');
+        
+        if (config.apiKey && config.apiKey !== '***STORED***') {
+            apiKeyInput.value = '***STORED***';
+            apiKeyInput.disabled = true;
+            apiKeyInput.placeholder = 'API key stored securely in OS credential store';
+            clearApiKeyBtn.style.display = 'inline-block';
+        }
+        
+        // Stay on settings page instead of redirecting to analyze page
+        // showMainContent(); // Removed auto-redirect
         isSubmittingConfig = false;
     })
     .catch(error => {
@@ -664,7 +720,9 @@ function handleTestConnection() {
     
     // Show loading state
     const testBtn = document.getElementById('testConnectionBtn');
-    const originalText = testBtn.innerHTML;
+    // Store the original button content more reliably
+    const originalText = '<i class="fas fa-plug"></i> Test Connection';
+    console.log('handleTestConnection - using originalText:', originalText);
     testBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testing...';
     testBtn.disabled = true;
     
@@ -681,7 +739,7 @@ function handleTestConnection() {
         .then(data => {
             if (data.status === 'success') {
                 // API key stored, now test connection
-                testConnectionWithStoredKey(config);
+                testConnectionWithStoredKey(config, originalText);
             } else {
                 showToast('Failed to store API key', 'error');
                 resetTestButton(testBtn, originalText);
@@ -694,11 +752,27 @@ function handleTestConnection() {
         });
     } else {
         // Use stored API key
-        testConnectionWithStoredKey(config);
+        testConnectionWithStoredKey(config, originalText);
     }
 }
 
-function testConnectionWithStoredKey(config) {
+function testConnectionWithStoredKey(config, originalText) {
+    const testBtn = document.getElementById('testConnectionBtn');
+    
+    // Ensure we have the original text, fallback to default if not provided
+    if (!originalText) {
+        originalText = '<i class="fas fa-plug"></i> Test Connection';
+    }
+    
+    console.log('testConnectionWithStoredKey called with originalText:', originalText);
+    
+    // Set a timeout fallback to restore button state after 10 seconds
+    const timeoutId = setTimeout(() => {
+        console.log('Timeout fallback: Restoring button state');
+        testBtn.innerHTML = originalText;
+        testBtn.disabled = false;
+    }, 10000);
+    
     // Test connection
     fetch('/api/test-connection', {
         method: 'POST',
@@ -711,8 +785,12 @@ function testConnectionWithStoredKey(config) {
             // No API key in body - will use stored key
         })
     })
-    .then(response => response.json())
+    .then(response => {
+        console.log('Test connection response received');
+        return response.json();
+    })
     .then(data => {
+        console.log('Test connection data:', data);
         if (data.success) {
             showToast(data.message, 'success');
             // Update status message in the modal
@@ -724,6 +802,13 @@ function testConnectionWithStoredKey(config) {
             const statusDiv = document.getElementById('configStatus');
             statusDiv.innerHTML = `<div class="status-error"><i class="fas fa-exclamation-circle"></i> ${data.error || 'Connection test failed'}</div>`;
         }
+        
+        // Restore button state immediately after processing response
+        console.log('Restoring button state after success/error with originalText:', originalText);
+        clearTimeout(timeoutId);
+        testBtn.innerHTML = originalText;
+        testBtn.disabled = false;
+        console.log('Button restored immediately, innerHTML now:', testBtn.innerHTML);
     })
     .catch(error => {
         console.error('Error testing connection:', error);
@@ -731,12 +816,13 @@ function testConnectionWithStoredKey(config) {
         // Update status message in the modal
         const statusDiv = document.getElementById('configStatus');
         statusDiv.innerHTML = `<div class="status-error"><i class="fas fa-exclamation-circle"></i> Error testing connection</div>`;
-    })
-    .finally(() => {
-        // Restore button state
-        const testBtn = document.getElementById('testConnectionBtn');
+        
+        // Restore button state on error
+        console.log('Restoring button state after error with originalText:', originalText);
+        clearTimeout(timeoutId);
         testBtn.innerHTML = originalText;
         testBtn.disabled = false;
+        console.log('Button restored after error, innerHTML now:', testBtn.innerHTML);
     });
 }
 
@@ -782,6 +868,59 @@ function handleClearApiKey() {
 function handleApiKeyInfoClick() {
     // Open the documentation link in a new tab
     window.open('https://developers.exabeam.com/logrhythm-siem/docs/register-third-party-applications-for-the-api', '_blank');
+}
+
+function handleToggleApiKeyVisibility() {
+    const apiKeyInput = document.getElementById('apiKey');
+    const toggleBtn = document.getElementById('toggleApiKeyVisibility');
+    const icon = toggleBtn.querySelector('i');
+    
+    // For textarea, we'll use a data attribute to track visibility state
+    const isHidden = apiKeyInput.getAttribute('data-hidden') === 'true';
+    
+    // If the field shows ***STORED*** and we're trying to show it, fetch the actual API key
+    if (apiKeyInput.value === '***STORED***' && isHidden) {
+        fetch('/api/api-key/value')
+            .then(response => response.json())
+            .then(data => {
+                if (data.apiKey) {
+                    // Show the actual API key
+                    apiKeyInput.value = data.apiKey;
+                    apiKeyInput.style.webkitTextSecurity = 'none';
+                    apiKeyInput.style.textSecurity = 'none';
+                    apiKeyInput.setAttribute('data-hidden', 'false');
+                    apiKeyInput.setAttribute('data-was-stored', 'true'); // Mark that this was a stored key
+                    icon.className = 'fas fa-eye-slash';
+                    toggleBtn.title = 'Hide API key';
+                } else {
+                    showToast('Failed to retrieve API key', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching API key:', error);
+                showToast('Failed to retrieve API key', 'error');
+            });
+    } else if (isHidden) {
+        // Normal show/hide for non-stored keys
+        apiKeyInput.style.webkitTextSecurity = 'none';
+        apiKeyInput.style.textSecurity = 'none';
+        apiKeyInput.setAttribute('data-hidden', 'false');
+        icon.className = 'fas fa-eye-slash';
+        toggleBtn.title = 'Hide API key';
+    } else {
+        // Hide the API key
+        apiKeyInput.style.webkitTextSecurity = 'disc';
+        apiKeyInput.style.textSecurity = 'disc';
+        apiKeyInput.setAttribute('data-hidden', 'true');
+        icon.className = 'fas fa-eye';
+        toggleBtn.title = 'Show API key';
+        
+        // If this was a stored key that we showed, restore the ***STORED*** display
+        if (apiKeyInput.getAttribute('data-was-stored') === 'true') {
+            apiKeyInput.value = '***STORED***';
+            apiKeyInput.setAttribute('data-was-stored', 'false');
+        }
+    }
 }
 
 function showMainContent() {
@@ -977,7 +1116,6 @@ function handleExport() {
 function clearResults() {
     allResults = [];
     updateResultsTable();
-    document.getElementById('resultsSummary').textContent = '';
     currentJobId = null;
     hideProgressSection();
     showToast('Results cleared', 'success');
@@ -1316,23 +1454,18 @@ function updateJobProgress(job) {
     console.log('Job ID from message:', job.id);
     if (job.id === currentJobId) {
         console.log('Job ID matches current job ID:', currentJobId);
-        // Update progress bar (progress section removed, but keep logging for debugging)
+        // Update progress bar
         const progressFill = document.getElementById('progressFill');
-        const progressText = document.getElementById('progressText');
         const jobStatus = document.getElementById('jobStatus');
         
         if (progressFill) {
             progressFill.style.width = `${job.progress}%`;
-        }
-        if (progressText) {
-            progressText.textContent = job.message;
         }
         
         if (job.results) {
             console.log('Job has results:', job.results.length, 'items');
             allResults = job.results;
             updateResultsTable();
-            updateResultsSummary();
         } else {
             console.log('Job has no results property');
         }
@@ -1489,24 +1622,6 @@ function updateResultsTable() {
     });
 }
 
-function updateResultsSummary() {
-    const summary = document.getElementById('resultsSummary');
-    if (allResults.length === 0) {
-        summary.textContent = '';
-        return;
-    }
-    
-    const successCount = allResults.filter(r => r.pingResult === 'Success').length;
-    const failureCount = allResults.filter(r => r.pingResult === 'Failure').length;
-    const unknownCount = allResults.filter(r => r.pingResult === 'Unknown').length;
-    
-    summary.innerHTML = `
-        <strong>Summary:</strong> ${allResults.length} total sources | 
-        <span class="ping-success">${successCount} Success</span> | 
-        <span class="ping-failure">${failureCount} Failure</span> | 
-        <span class="ping-unknown">${unknownCount} Unknown</span>
-    `;
-}
 
 function filterResults() {
     const searchTerm = document.getElementById('searchInput').value.toLowerCase();
@@ -1613,13 +1728,35 @@ function clearFilters() {
 }
 
 function showProgressSection() {
-    // Progress section removed - no longer needed
-    console.log('Progress section display requested (section removed)');
+    const progressSection = document.getElementById('progressSection');
+    console.log('showProgressSection called, element found:', !!progressSection);
+    if (progressSection) {
+        console.log('Current display style before:', progressSection.style.display);
+        progressSection.style.display = 'block';
+        console.log('Current display style after:', progressSection.style.display);
+        console.log('Progress section displayed');
+        
+        // Also update the progress elements to show some content
+        const jobStatus = document.getElementById('jobStatus');
+        const progressFill = document.getElementById('progressFill');
+        
+        if (jobStatus) jobStatus.textContent = 'Analysis in progress...';
+        if (progressFill) progressFill.style.width = '10%';
+        
+    } else {
+        console.error('Progress section element not found!');
+    }
 }
 
 function hideProgressSection() {
-    // Progress section removed - no longer needed
-    console.log('Progress section hide requested (section removed)');
+    const progressSection = document.getElementById('progressSection');
+    console.log('hideProgressSection called, element found:', !!progressSection);
+    if (progressSection) {
+        progressSection.style.display = 'none';
+        console.log('Progress section hidden');
+    } else {
+        console.error('Progress section element not found in hideProgressSection!');
+    }
 }
 
 function showLoadingOverlay() {

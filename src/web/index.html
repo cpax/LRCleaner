@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LRCleaner - LogRhythm Log Source Management</title>
-    <link rel="stylesheet" href="/static/style.css?v=2">
+    <link rel="stylesheet" href="/static/style.css?v=3">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
 </head>
 <body>
@@ -61,7 +61,12 @@
                                data-tooltip="How to create an API key:&#10;1. Log in to the Client Console as a Global Administrator&#10;2. On the main toolbar, click Deployment Manager&#10;3. Click the Third Party Applications tab&#10;4. Right-click the blank area of the grid, and then click New&#10;5. Type an Application Name and Description (must be unique)&#10;6. Click OK to save the application&#10;7. Right-click the newly created application, and then click Properties&#10;8. (Optional) Change the number of days you want the token to be valid&#10;9. Click Generate Token&#10;10. Enter the password for the user, and then click OK&#10;11. Copy the token and paste here&#10;&#10;For detailed instructions, visit:&#10;https://developers.exabeam.com/logrhythm-siem/docs/register-third-party-applications-for-the-api"></i>
                         </label>
                         <div class="api-key-container">
-                            <input type="password" id="apiKey" name="apiKey" placeholder="Enter your LogRhythm API key" required>
+                            <div class="api-key-input-wrapper">
+                                <textarea id="apiKey" name="apiKey" placeholder="Enter your LogRhythm API key" required rows="3" style="resize: vertical; -webkit-text-security: disc; text-security: disc;" data-hidden="true"></textarea>
+                                <button type="button" id="toggleApiKeyVisibility" class="api-key-toggle" title="Toggle API key visibility">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
                             <button type="button" id="clearApiKeyBtn" class="btn btn-danger btn-sm" style="display: none;" title="Clear stored API key">
                                 <i class="fas fa-trash"></i> Clear
                             </button>
@@ -182,6 +187,19 @@
                         <button id="clearBtn" class="btn btn-secondary">
                             <i class="fas fa-trash"></i> Clear Results
                         </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Progress Section -->
+        <section id="progressSection" class="progress-section" style="display: none;">
+            <div class="card">
+                <h2><i class="fas fa-tasks"></i> Analysis Progress</h2>
+                <div class="progress-container">
+                    <div id="jobStatus" class="job-status">Starting analysis...</div>
+                    <div class="progress-bar">
+                        <div id="progressFill" class="progress-fill"></div>
                     </div>
                 </div>
             </div>
@@ -573,7 +591,6 @@
                         </tbody>
                     </table>
                 </div>
-                <div id="resultsSummary" class="results-summary"></div>
                 
                 <!-- Export Button -->
                 <div class="export-section" style="margin-top: 20px; text-align: center;">
@@ -626,6 +643,6 @@
     <!-- Toast Notifications -->
     <div id="toastContainer" class="toast-container"></div>
 
-    <script src="/static/script.js?v=2"></script>
+    <script src="/static/script.js?v=3"></script>
 </body>
 </html>
