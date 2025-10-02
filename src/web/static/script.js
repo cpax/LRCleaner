@@ -2130,6 +2130,39 @@ function updateHostSelection(hostId, selected) {
         hostItem.classList.toggle('selected', selected);
     }
     
+    // Automatically select/deselect all log sources under this host
+    const host = hostAnalysis.find(h => String(h.hostId) === String(hostId));
+    if (host && host.logSources) {
+        console.log('Found host with log sources:', host.logSources.length);
+        host.logSources.forEach(logSource => {
+            if (selected) {
+                // Select the log source
+                if (!selectedLogSources.includes(String(logSource.id))) {
+                    selectedLogSources.push(String(logSource.id));
+                    console.log('Added log source to selection:', logSource.id);
+                }
+                
+                // Also check the log source checkbox in the UI
+                const logSourceCheckbox = document.querySelector(`input[onchange*="updateLogSourceSelection('${logSource.id}'"]`);
+                if (logSourceCheckbox && !logSourceCheckbox.checked) {
+                    logSourceCheckbox.checked = true;
+                    console.log('Checked log source checkbox:', logSource.id);
+                }
+            } else {
+                // Deselect the log source
+                selectedLogSources = selectedLogSources.filter(id => id !== String(logSource.id));
+                console.log('Removed log source from selection:', logSource.id);
+                
+                // Also uncheck the log source checkbox in the UI
+                const logSourceCheckbox = document.querySelector(`input[onchange*="updateLogSourceSelection('${logSource.id}'"]`);
+                if (logSourceCheckbox && logSourceCheckbox.checked) {
+                    logSourceCheckbox.checked = false;
+                    console.log('Unchecked log source checkbox:', logSource.id);
+                }
+            }
+        });
+    }
+    
     // Update execute button - always enabled
     const executeBtn = document.getElementById('executeRetirementBtn');
     if (executeBtn) {
