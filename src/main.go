@@ -478,6 +478,7 @@ func main() {
 
 	// API Key management routes
 	api.HandleFunc("/api-key", handleAPIKey).Methods("GET", "POST", "DELETE")
+	api.HandleFunc("/api-key/value", handleAPIKeyValue).Methods("GET")
 
 	// Rollback API routes
 	api.HandleFunc("/rollback/history", handleRollbackHistory).Methods("GET")
@@ -633,15 +634,30 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewEncoder(w).Encode(response)
 	case "POST":
-		var newConfig Config
-		if err := json.NewDecoder(r.Body).Decode(&newConfig); err != nil {
+		var requestData struct {
+			Hostname string `json:"hostname"`
+			Port     int    `json:"port"`
+			APIKey   string `json:"apiKey"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
 			return
 		}
 
-		config = &newConfig
+		// Update config with new values
+		config.Hostname = requestData.Hostname
+		config.Port = requestData.Port
 
-		// Save to file (without API key)
+		// Save API key to credential store if provided and not already stored
+		if requestData.APIKey != "" && requestData.APIKey != "***STORED***" {
+			if err := StoreAPIKey(requestData.APIKey); err != nil {
+				log.Printf("Error storing API key: %v", err)
+				http.Error(w, "Failed to store API key", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		// Save config to file (without API key)
 		data, err := json.MarshalIndent(config, "", "  ")
 		if err != nil {
 			log.Printf("Error marshaling config: %v", err)
@@ -705,6 +721,26 @@ func handleAPIKey(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 	}
+}
+
+func handleAPIKeyValue(w http.ResponseWriter, r *http.Request) {
+	// Get the actual API key value
+	apiKey, err := GetAPIKey()
+	if err != nil {
+		log.Printf("Error retrieving API key: %v", err)
+		http.Error(w, "Failed to retrieve API key", http.StatusInternalServerError)
+		return
+	}
+
+	if apiKey == "" {
+		http.Error(w, "No API key found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"apiKey": apiKey,
+	})
 }
 
 func handleTestConnection(w http.ResponseWriter, r *http.Request) {
@@ -2611,6 +2647,12 @@ func removeHostIdentifiers(hostID interface{}) []HostIdentifier {
 				Value: ipAddress.(string),
 			})
 		}
+	}
+
+	// Check if we have any identifiers to remove
+	if len(hostIdentifiersPayload) == 0 {
+		log.Printf("Host %s has no IPAddress identifiers to remove (empty payload)", idToString(hostID))
+		return []HostIdentifier{} // Success - no identifiers to remove
 	}
 
 	payload := map[string]interface{}{
