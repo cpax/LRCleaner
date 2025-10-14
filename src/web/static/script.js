@@ -1983,6 +1983,7 @@ function updateResultsTableForApplyMode() {
                         <td class="log-source-checkbox-cell">
                             <label class="checkbox-label">
                                 <input type="checkbox" 
+                                       data-log-source-id="${source.id}"
                                        onchange="updateLogSourceSelection('${source.id}', this.checked)">
                                 <span class="checkmark"></span>
                             </label>
@@ -2143,7 +2144,7 @@ function updateHostSelection(hostId, selected) {
                 }
                 
                 // Also check the log source checkbox in the UI
-                const logSourceCheckbox = document.querySelector(`input[onchange*="updateLogSourceSelection('${logSource.id}'"]`);
+                const logSourceCheckbox = document.querySelector(`input[data-log-source-id="${logSource.id}"]`);
                 if (logSourceCheckbox && !logSourceCheckbox.checked) {
                     logSourceCheckbox.checked = true;
                     console.log('Checked log source checkbox:', logSource.id);
@@ -2154,7 +2155,7 @@ function updateHostSelection(hostId, selected) {
                 console.log('Removed log source from selection:', logSource.id);
                 
                 // Also uncheck the log source checkbox in the UI
-                const logSourceCheckbox = document.querySelector(`input[onchange*="updateLogSourceSelection('${logSource.id}'"]`);
+                const logSourceCheckbox = document.querySelector(`input[data-log-source-id="${logSource.id}"]`);
                 if (logSourceCheckbox && logSourceCheckbox.checked) {
                     logSourceCheckbox.checked = false;
                     console.log('Unchecked log source checkbox:', logSource.id);
@@ -2297,7 +2298,7 @@ function selectAllHosts() {
                 }
                 
                 // Also check the log source checkbox in the UI
-                const logSourceCheckbox = document.querySelector(`input[onchange*="updateLogSourceSelection('${logSource.id}'"]`);
+                const logSourceCheckbox = document.querySelector(`input[data-log-source-id="${logSource.id}"]`);
                 if (logSourceCheckbox && !logSourceCheckbox.checked) {
                     logSourceCheckbox.checked = true;
                     console.log('Checked log source checkbox:', logSource.id);
@@ -2328,7 +2329,7 @@ function deselectAllHosts() {
     });
     
     // Deselect all log source checkboxes
-    const allLogSourceCheckboxes = document.querySelectorAll('input[onchange*="updateLogSourceSelection"]');
+    const allLogSourceCheckboxes = document.querySelectorAll('input[data-log-source-id]');
     allLogSourceCheckboxes.forEach(checkbox => {
         checkbox.checked = false;
     });
