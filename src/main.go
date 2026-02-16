@@ -417,11 +417,20 @@ func loadRollbackFiles() {
 
 		// Verify checksum if present
 		if rollbackData.Checksum != "" {
-			expectedChecksum := calculateChecksum(data)
-			if rollbackData.Checksum != expectedChecksum {
+			savedChecksum := rollbackData.Checksum
+			// Recalculate checksum the same way it was created: with an empty checksum field
+			rollbackData.Checksum = ""
+			jsonForChecksum, err := json.Marshal(&rollbackData)
+			if err != nil {
+				log.Printf("Error re-marshaling rollback data for checksum verification %s: %v", file, err)
+				continue
+			}
+			expectedChecksum := calculateChecksum(jsonForChecksum)
+			if savedChecksum != expectedChecksum {
 				log.Printf("Checksum mismatch for rollback file %s, skipping", file)
 				continue
 			}
+			rollbackData.Checksum = savedChecksum
 		}
 
 		// Store in memory
@@ -913,6 +922,17 @@ func handleBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 func performSQLBackup(password, location string) (bool, error) {
+	// Sanitize location to prevent SQL injection - only allow alphanumeric, backslash, colon, underscore, hyphen, period, and forward slash
+	for _, ch := range location {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
+			ch == '\\' || ch == '/' || ch == ':' || ch == '_' || ch == '-' || ch == '.' || ch == ' ') {
+			return false, fmt.Errorf("invalid character in backup location: %c", ch)
+		}
+	}
+	if strings.Contains(location, "'") || strings.Contains(location, ";") || strings.Contains(location, "--") {
+		return false, fmt.Errorf("backup location contains disallowed characters")
+	}
+
 	// SQL Server connection string
 	// Assuming LogRhythmEMDB is on localhost with default instance
 	connectionString := fmt.Sprintf("server=localhost;user id=logrhythmadmin;password=%s;database=LogRhythmEMDB;encrypt=disable", password)
@@ -933,12 +953,16 @@ func performSQLBackup(password, location string) (bool, error) {
 	timestamp := time.Now().Format("20060102_150405")
 	backupFile := fmt.Sprintf("%s\\LogRhythmEMDB_backup_%s.bak", location, timestamp)
 
-	// Execute backup command
-	backupQuery := fmt.Sprintf("BACKUP DATABASE [LogRhythmEMDB] TO DISK = '%s' WITH FORMAT, INIT, NAME = 'LogRhythmEMDB Full Backup', SKIP, NOREWIND, NOUNLOAD, STATS = 10", backupFile)
-
-	_, err = db.Exec(backupQuery)
+	// Execute backup command using sp_executesql with parameterized path
+	backupQuery := fmt.Sprintf("BACKUP DATABASE [LogRhythmEMDB] TO DISK = @backupPath WITH FORMAT, INIT, NAME = 'LogRhythmEMDB Full Backup', SKIP, NOREWIND, NOUNLOAD, STATS = 10")
+	_, err = db.Exec("EXEC sp_executesql @stmt=N'"+backupQuery+"', @params=N'@backupPath NVARCHAR(500)', @backupPath=@p1", backupFile)
 	if err != nil {
-		return false, fmt.Errorf("failed to execute backup: %v", err)
+		// Fallback: try direct execution with sanitized path (already validated above)
+		directQuery := fmt.Sprintf("BACKUP DATABASE [LogRhythmEMDB] TO DISK = N'%s' WITH FORMAT, INIT, NAME = 'LogRhythmEMDB Full Backup', SKIP, NOREWIND, NOUNLOAD, STATS = 10", backupFile)
+		_, err = db.Exec(directQuery)
+		if err != nil {
+			return false, fmt.Errorf("failed to execute backup: %v", err)
+		}
 	}
 
 	log.Printf("Database backup completed successfully: %s", backupFile)
@@ -1127,13 +1151,13 @@ func handleExport(w http.ResponseWriter, r *http.Request) {
 	csv := "LogSourceID,HostID,HostName,LogSourceName,LogSourceType,MaxLogDate,PingResult\n"
 	for _, result := range resultsToExport {
 		csv += fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s\n",
-			idToString(result.ID),
-			idToString(result.HostID),
-			result.HostName,
-			result.Name,
-			result.LogSourceType,
-			result.MaxLogDate,
-			result.PingResult)
+			csvEscape(idToString(result.ID)),
+			csvEscape(idToString(result.HostID)),
+			csvEscape(result.HostName),
+			csvEscape(result.Name),
+			csvEscape(result.LogSourceType),
+			csvEscape(result.MaxLogDate),
+			csvEscape(result.PingResult))
 	}
 
 	log.Printf("Generated CSV for job %s, length: %d bytes", jobID, len(csv))
@@ -1168,19 +1192,27 @@ func handleJobStatus(w http.ResponseWriter, r *http.Request) {
 // Broadcast job update to all WebSocket connections
 func broadcastJobUpdate(job *JobStatus) {
 	wsMutex.RLock()
-	defer wsMutex.RUnlock()
-
 	log.Printf("Broadcasting job update for job %s to %d WebSocket connections", job.ID, len(wsConnections))
 
+	var failedConns []*websocket.Conn
 	for conn := range wsConnections {
 		if err := conn.WriteJSON(job); err != nil {
 			log.Printf("Error broadcasting job update via WebSocket: %v", err)
-			// Remove failed connection
-			delete(wsConnections, conn)
-			conn.Close()
+			failedConns = append(failedConns, conn)
 		} else {
 			log.Printf("Successfully broadcasted job update to WebSocket connection")
 		}
+	}
+	wsMutex.RUnlock()
+
+	// Remove failed connections with a write lock
+	if len(failedConns) > 0 {
+		wsMutex.Lock()
+		for _, conn := range failedConns {
+			delete(wsConnections, conn)
+			conn.Close()
+		}
+		wsMutex.Unlock()
 	}
 }
 
@@ -1433,9 +1465,9 @@ func getAllLogSources() ([]LogSource, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
 			return nil, fmt.Errorf("API request failed with status: %d", resp.StatusCode)
 		}
 
@@ -1447,6 +1479,7 @@ func getAllLogSources() ([]LogSource, error) {
 
 		// Read the response body
 		bodyBytes, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			return nil, err
 		}
@@ -1554,6 +1587,24 @@ func containsIgnoreCase(s, substr string) bool {
 	s = strings.ToLower(s)
 	substr = strings.ToLower(substr)
 	return strings.Contains(s, substr)
+}
+
+// csvEscape escapes a string for safe inclusion in a CSV field.
+// It quotes fields containing commas, quotes, or newlines, and
+// prefixes formula-triggering characters to prevent CSV injection.
+func csvEscape(s string) string {
+	// Prevent CSV formula injection
+	if len(s) > 0 {
+		switch s[0] {
+		case '=', '+', '-', '@', '\t', '\r':
+			s = "'" + s
+		}
+	}
+	// Quote the field if it contains special characters
+	if strings.ContainsAny(s, ",\"\n\r") {
+		s = "\"" + strings.ReplaceAll(s, "\"", "\"\"") + "\""
+	}
+	return s
 }
 
 // Helper function to convert interface{} ID to string
@@ -3094,14 +3145,21 @@ func saveRollbackData(rollbackData *RollbackData) {
 		return
 	}
 
-	// Calculate checksum
-	jsonData, err := json.Marshal(rollbackData)
+	// Calculate checksum on data with empty checksum field, then set it
+	rollbackData.Checksum = ""
+	jsonForChecksum, err := json.Marshal(rollbackData)
+	if err != nil {
+		log.Printf("Error marshaling rollback data for checksum: %v", err)
+		return
+	}
+	rollbackData.Checksum = calculateChecksum(jsonForChecksum)
+
+	// Re-marshal with the checksum included for saving
+	jsonData, err := json.MarshalIndent(rollbackData, "", "  ")
 	if err != nil {
 		log.Printf("Error marshaling rollback data: %v", err)
 		return
 	}
-
-	rollbackData.Checksum = calculateChecksum(jsonData)
 
 	// Save to file
 	filename := fmt.Sprintf("LRCleaner_rollback_%s_%s.json",
