@@ -109,6 +109,15 @@ function showAnalysisSection() {
     console.log('Showing analysis section');
 }
 
+function switchSettingsTab(tabName) {
+    document.querySelectorAll('.settings-tab').forEach(function(t) {
+        t.classList.toggle('active', t.getAttribute('data-tab') === tabName);
+    });
+    document.querySelectorAll('.settings-tab-panel').forEach(function(p) {
+        p.classList.toggle('active', p.getAttribute('data-tab') === tabName);
+    });
+}
+
 function showSettingsSection() {
     // Hide analysis section and rollback section, show settings section
     const settingsSection = document.getElementById('settingsSection');
@@ -213,6 +222,13 @@ function initializeApp() {
     // Load current configuration
     loadConfiguration();
     
+    // Setup settings tab listeners
+    document.querySelectorAll('.settings-tab').forEach(function(tab) {
+        tab.addEventListener('click', function() {
+            switchSettingsTab(this.getAttribute('data-tab'));
+        });
+    });
+
     // Setup event listeners
     console.log('Setting up event listeners...');
     setupEventListeners();

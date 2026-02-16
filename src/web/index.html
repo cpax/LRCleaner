@@ -45,7 +45,13 @@
 
         <!-- Settings Section -->
         <div id="settingsSection" class="settings-section" style="display: none;">
+            <div class="settings-tabs">
+                <button class="settings-tab active" data-tab="connection"><i class="fas fa-plug"></i> Connection</button>
+                <button class="settings-tab" data-tab="backup"><i class="fas fa-database"></i> Database Backup</button>
+                <button class="settings-tab" data-tab="rollback"><i class="fas fa-undo"></i> Rollback</button>
+            </div>
             <!-- Configuration Section -->
+            <div class="settings-tab-panel active" data-tab="connection">
             <div class="card">
                 <h2><i class="fas fa-sliders-h"></i> Configuration</h2>
                 <form id="configForm">
@@ -88,7 +94,9 @@
                 <div id="configStatus" class="status-message"></div>
             </div>
 
+            </div>
             <!-- Database Backup Section -->
+            <div class="settings-tab-panel" data-tab="backup">
             <div class="card">
                 <h2><i class="fas fa-database"></i> Database Backup</h2>
                 <div class="backup-content">
@@ -120,7 +128,9 @@
                 </div>
             </div>
 
+            </div>
             <!-- Rollback Configuration Section -->
+            <div class="settings-tab-panel" data-tab="rollback">
             <div class="card">
                 <h2><i class="fas fa-undo"></i> Rollback Configuration</h2>
                 <div class="rollback-config-content">
@@ -163,6 +173,7 @@
                     </form>
                     <div id="rollbackConfigStatus" class="status-message"></div>
                 </div>
+            </div>
             </div>
         </div>
 
