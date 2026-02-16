@@ -2163,11 +2163,11 @@ function updateHostSelection(hostId, selected) {
         });
     }
     
-    // Update execute button - always enabled
+    // Update execute button - enabled only when hosts are selected
     const executeBtn = document.getElementById('executeRetirementBtn');
     if (executeBtn) {
-        executeBtn.disabled = false; // Always enabled
-        console.log('Execute button always enabled, selected hosts count:', selectedHosts.length);
+        executeBtn.disabled = selectedHosts.length === 0;
+        console.log('Execute button disabled:', executeBtn.disabled, ', selected hosts count:', selectedHosts.length);
     } else {
         console.error('Execute button element not found!');
     }
@@ -2178,7 +2178,7 @@ function updateHostSelection(hostId, selected) {
 
 function updateLogSourceSelection(logSourceId, selected) {
     console.log('updateLogSourceSelection called with:', logSourceId, selected);
-    
+
     if (selected) {
         if (!selectedLogSources.includes(logSourceId)) {
             selectedLogSources.push(logSourceId);
@@ -2186,15 +2186,47 @@ function updateLogSourceSelection(logSourceId, selected) {
     } else {
         selectedLogSources = selectedLogSources.filter(id => id !== logSourceId);
     }
-    
+
     console.log('Updated selectedLogSources:', selectedLogSources);
-    
+
+    // Find the parent host for this log source
+    const parentHost = hostAnalysis.find(h =>
+        h.logSources && h.logSources.some(ls => String(ls.id) === String(logSourceId))
+    );
+
+    if (parentHost) {
+        const parentHostId = String(parentHost.hostId);
+        const allChildIds = parentHost.logSources.map(ls => String(ls.id));
+        const allChildrenSelected = allChildIds.every(id => selectedLogSources.includes(id));
+
+        const hostRow = document.querySelector(`[data-host-id="${parentHostId}"]`);
+        const hostCheckbox = hostRow ? hostRow.querySelector('input[type="checkbox"]') : null;
+
+        if (allChildrenSelected) {
+            // All children selected → auto-check parent host
+            if (!selectedHosts.includes(parentHostId)) {
+                selectedHosts.push(parentHostId);
+                if (hostRow) hostRow.classList.add('selected');
+                if (hostCheckbox) hostCheckbox.checked = true;
+                console.log('Auto-selected parent host:', parentHostId);
+            }
+        } else {
+            // Not all children selected → auto-uncheck parent host
+            if (selectedHosts.includes(parentHostId)) {
+                selectedHosts = selectedHosts.filter(id => id !== parentHostId);
+                if (hostRow) hostRow.classList.remove('selected');
+                if (hostCheckbox) hostCheckbox.checked = false;
+                console.log('Auto-deselected parent host:', parentHostId);
+            }
+        }
+    }
+
     // Update execute button state
     const executeBtn = document.getElementById('executeRetirementBtn');
     if (executeBtn) {
-        executeBtn.disabled = (selectedHosts.length === 0 && selectedLogSources.length === 0);
+        executeBtn.disabled = selectedHosts.length === 0;
     }
-    
+
     // Update host summary
     updateHostSummary();
 }
@@ -2227,11 +2259,10 @@ function updateHostSummary() {
     }, 0);
     
     summary.innerHTML = `
-        <strong>Summary:</strong> ${totalHosts} total hosts | 
-        ${recommendedHosts} recommended | 
-        ${selectedHosts.length} hosts selected | 
-        ${selectedLogSources.length} log sources selected | 
-        ${totalLogSources + selectedLogSources.length} total items will be retired
+        <strong>Summary:</strong> ${totalHosts} total hosts |
+        ${recommendedHosts} recommended |
+        ${selectedHosts.length} hosts selected |
+        ${totalLogSources} log sources will be retired
     `;
 }
 
@@ -2253,20 +2284,9 @@ function selectVisibleHosts() {
                 updateHostSelection(hostId, true);
             }
             
-            // Also select all log sources under this host
-            const host = hostAnalysis.find(h => String(h.hostId) === String(hostId));
-            if (host && host.logSources) {
-                console.log('Found host with log sources:', host.logSources.length);
-                host.logSources.forEach(logSource => {
-                    if (logSource.recommended && !selectedLogSources.includes(String(logSource.id))) {
-                        selectedLogSources.push(String(logSource.id));
-                        console.log('Added log source to selection:', logSource.id);
-                    }
-                });
-            }
         }
     });
-    
+
     console.log('Final selectedHosts:', selectedHosts);
     console.log('Final selectedLogSources:', selectedLogSources);
     updateHostSummary();
@@ -2288,22 +2308,6 @@ function selectAllHosts() {
             console.log('Host row not found for ID:', host.hostId);
         }
         
-        // Also select all log sources under this host (both recommended and non-recommended)
-        if (host.logSources) {
-            host.logSources.forEach(logSource => {
-                if (!selectedLogSources.includes(String(logSource.id))) {
-                    selectedLogSources.push(String(logSource.id));
-                    console.log('Added log source to selection:', logSource.id);
-                }
-                
-                // Also check the log source checkbox in the UI
-                const logSourceCheckbox = document.querySelector(`input[onchange*="updateLogSourceSelection('${logSource.id}'"]`);
-                if (logSourceCheckbox && !logSourceCheckbox.checked) {
-                    logSourceCheckbox.checked = true;
-                    console.log('Checked log source checkbox:', logSource.id);
-                }
-            });
-        }
     });
     console.log('Final selectedHosts:', selectedHosts);
     console.log('Final selectedLogSources:', selectedLogSources);
@@ -2356,27 +2360,18 @@ function deselectAllHosts() {
 }
 
 function executeRetirement() {
-    if (selectedHosts.length === 0 && selectedLogSources.length === 0) {
-        showToast('Please select at least one host or log source to retire', 'warning');
+    if (selectedHosts.length === 0) {
+        showToast('Please select at least one host to retire', 'warning');
         return;
     }
-    
+
     // Confirm action
-    const totalLogSourcesFromHosts = selectedHosts.reduce((total, hostId) => {
+    const totalLogSources = selectedHosts.reduce((total, hostId) => {
         const host = hostAnalysis.find(h => String(h.hostId) === String(hostId));
         return total + (host ? host.logSourceCount : 0);
     }, 0);
-    
-    const totalItems = selectedHosts.length + selectedLogSources.length;
-    const totalLogSources = totalLogSourcesFromHosts + selectedLogSources.length;
-    
-    let confirmMessage = `Are you sure you want to retire ${totalItems} items?`;
-    if (selectedHosts.length > 0) {
-        confirmMessage += `\n- ${selectedHosts.length} hosts (${totalLogSourcesFromHosts} log sources)`;
-    }
-    if (selectedLogSources.length > 0) {
-        confirmMessage += `\n- ${selectedLogSources.length} individual log sources`;
-    }
+
+    let confirmMessage = `Are you sure you want to retire ${selectedHosts.length} hosts (${totalLogSources} log sources)?`;
     confirmMessage += `\n\nThis action cannot be undone.`;
     
     if (!confirm(confirmMessage)) {
