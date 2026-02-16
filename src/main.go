@@ -217,6 +217,8 @@ var (
 	// Rollback management
 	rollbackHistory = make(map[string]*RollbackData)
 	rollbackMutex   sync.RWMutex
+	// SMA retirement API support (PATCH /lr-admin-api/agents requires 7.22+)
+	smaRetirementSupported bool
 )
 
 // Credential Manager - Cross-platform secure storage
@@ -1899,24 +1901,29 @@ func analyzeCollectionHosts(jobID string) []CollectionHostAnalysis {
 		log.Printf("Processing recommended collection hosts for retirement...")
 		retiredCount := 0
 
+		var manualRetirementAgents []string
 		for _, ch := range collectionHostAnalysis {
 			if ch.Recommended {
 				log.Printf("Processing collection host %s (ID: %s) for retirement...", ch.SystemMonitorName, idToString(ch.SystemMonitorID))
 
-				// First unlicense the system monitor
-				if unlicenseSystemMonitor(ch.SystemMonitorID) {
-					log.Printf("  ✓ Successfully unlicensed collection host: %s", ch.SystemMonitorName)
-
-					// Then retire the system monitor
-					if retireSystemMonitor(ch.SystemMonitorID) {
+				if smaRetirementSupported {
+					if retireSystemMonitorPatch(ch.SystemMonitorID) {
 						retiredCount++
 						log.Printf("  ✓ Successfully retired collection host: %s", ch.SystemMonitorName)
 					} else {
 						log.Printf("  ✗ Failed to retire collection host: %s", ch.SystemMonitorName)
 					}
 				} else {
-					log.Printf("  ✗ Failed to unlicense collection host: %s", ch.SystemMonitorName)
+					log.Printf("WARN: SMA retirement not supported (pre-7.22 API). Agent %s (%s) requires manual retirement.",
+						idToString(ch.SystemMonitorID), ch.SystemMonitorName)
+					manualRetirementAgents = append(manualRetirementAgents, fmt.Sprintf("%s (ID: %s)", ch.SystemMonitorName, idToString(ch.SystemMonitorID)))
 				}
+			}
+		}
+		if len(manualRetirementAgents) > 0 {
+			log.Printf("WARN: The following collection host agents require manual retirement (API pre-7.22):")
+			for _, a := range manualRetirementAgents {
+				log.Printf("  - %s", a)
 			}
 		}
 
@@ -1932,6 +1939,9 @@ func executeRetirement(jobID string, selectedHosts []string) {
 	jobsMutex.Lock()
 	job := jobs[jobID]
 	jobsMutex.Unlock()
+
+	// Detect whether PATCH /lr-admin-api/agents is available (7.22+)
+	checkSMARetirementSupport()
 
 	// Create rollback data before starting retirement
 	rollbackData := createRollbackData(jobID, selectedHosts)
@@ -2080,11 +2090,15 @@ func executeRetirement(jobID string, selectedHosts []string) {
 			log.Printf("System monitor agent %s has no active log sources, proceeding with retirement...", agentID)
 
 			// Retire the system monitor agent
-			if retireSystemMonitor(agentID) {
-				retiredAgents++
-				log.Printf("  ✓ Successfully retired system monitor agent: %s", agentID)
+			if smaRetirementSupported {
+				if retireSystemMonitorPatch(agentID) {
+					retiredAgents++
+					log.Printf("  ✓ Successfully retired system monitor agent: %s", agentID)
+				} else {
+					log.Printf("  ✗ Failed to retire system monitor agent: %s", agentID)
+				}
 			} else {
-				log.Printf("  ✗ Failed to retire system monitor agent: %s", agentID)
+				log.Printf("WARN: SMA retirement not supported (pre-7.22 API). Agent %s requires manual retirement.", agentID)
 			}
 		} else {
 			log.Printf("System monitor agent %s still has active log sources, skipping agent retirement", agentID)
@@ -2128,14 +2142,10 @@ func executeRetirement(jobID string, selectedHosts []string) {
 				log.Printf("Found system monitor agent %s associated with host %s", systemMonitorID, hostID)
 				log.Printf("DEBUG: About to retire agent %s before retiring host %s", systemMonitorID, hostID)
 
-				// First unlicense the system monitor
-				log.Printf("DEBUG: Calling unlicenseSystemMonitor for agent %s", systemMonitorID)
-				if unlicenseSystemMonitor(systemMonitorID) {
-					log.Printf("  ✓ Successfully unlicensed system monitor agent: %s", systemMonitorID)
-
-					// Then retire the system monitor
-					log.Printf("DEBUG: Calling retireSystemMonitor for agent %s", systemMonitorID)
-					if retireSystemMonitor(systemMonitorID) {
+				// Retire the system monitor agent
+				if smaRetirementSupported {
+					log.Printf("DEBUG: Calling retireSystemMonitorPatch for agent %s", systemMonitorID)
+					if retireSystemMonitorPatch(systemMonitorID) {
 						log.Printf("  ✓ Successfully retired system monitor agent: %s", systemMonitorID)
 						log.Printf("DEBUG: Agent %s retirement completed successfully", systemMonitorID)
 					} else {
@@ -2143,8 +2153,7 @@ func executeRetirement(jobID string, selectedHosts []string) {
 						log.Printf("DEBUG: Agent %s retirement failed, but continuing with host retirement", systemMonitorID)
 					}
 				} else {
-					log.Printf("  ✗ Failed to unlicense system monitor agent: %s", systemMonitorID)
-					log.Printf("DEBUG: Agent %s unlicensing failed, but continuing with host retirement", systemMonitorID)
+					log.Printf("WARN: SMA retirement not supported (pre-7.22 API). Agent %s requires manual retirement.", systemMonitorID)
 				}
 			} else {
 				log.Printf("No system monitor agent found for host %s", hostID)
@@ -2443,16 +2452,17 @@ func checkHostHasActiveLogSources(hostID interface{}) bool {
 	return hasActiveLogSources
 }
 
-func unlicenseSystemMonitor(systemMonitorID interface{}) bool {
-	log.Printf("DEBUG: Starting unlicenseSystemMonitor for agent %s", idToString(systemMonitorID))
-	// First, GET the system monitor to get the complete object
-	getURL := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(systemMonitorID))
-	log.Printf("DEBUG: GET URL for agent %s: %s", idToString(systemMonitorID), getURL)
+// checkSMARetirementSupport probes whether PATCH /lr-admin-api/agents is available (7.22+).
+// It sends a PATCH with an empty array — a no-op that returns 200 on 7.22+ and 404/405 on older versions.
+func checkSMARetirementSupport() {
+	url := fmt.Sprintf("https://%s:%d/lr-admin-api/agents", config.Hostname, config.Port)
+	body := []byte("[]") // empty array = no-op
 
-	req, err := http.NewRequest("GET", getURL, nil)
+	req, err := http.NewRequest("PATCH", url, bytes.NewBuffer(body))
 	if err != nil {
-		log.Printf("Error creating GET request for system monitor %s: %v", idToString(systemMonitorID), err)
-		return false
+		log.Printf("WARN: Could not create PATCH probe request: %v — assuming SMA retirement unsupported", err)
+		smaRetirementSupported = false
+		return
 	}
 
 	req.Header.Set("Authorization", "Bearer "+GetConfigAPIKey())
@@ -2460,76 +2470,58 @@ func unlicenseSystemMonitor(systemMonitorID interface{}) bool {
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		log.Printf("Error getting system monitor %s: %v", idToString(systemMonitorID), err)
-		return false
+		log.Printf("WARN: PATCH /lr-admin-api/agents probe failed: %v — assuming SMA retirement unsupported", err)
+		smaRetirementSupported = false
+		return
 	}
 	defer resp.Body.Close()
+	io.ReadAll(resp.Body) // drain
 
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Failed to get system monitor %s, status: %d", idToString(systemMonitorID), resp.StatusCode)
-		return false
-	}
-
-	// Parse the response
-	var systemMonitor map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&systemMonitor); err != nil {
-		log.Printf("Error decoding system monitor %s: %v", idToString(systemMonitorID), err)
-		return false
-	}
-
-	// Modify the system monitor object to unlicense it
-	// Set recordStatusName to "Unlicensed" (this is the LogRhythm way to unlicense)
-	log.Printf("DEBUG: Setting recordStatusName to 'Unlicensed' for agent %s", idToString(systemMonitorID))
-	systemMonitor["recordStatusName"] = "Unlicensed"
-
-	// PUT the updated system monitor back
-	putURL := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(systemMonitorID))
-	log.Printf("DEBUG: PUT URL for agent %s: %s", idToString(systemMonitorID), putURL)
-
-	jsonData, err := json.Marshal(systemMonitor)
-	if err != nil {
-		log.Printf("Error marshaling updated system monitor %s: %v", idToString(systemMonitorID), err)
-		return false
-	}
-	log.Printf("DEBUG: PUT payload for agent %s: %s", idToString(systemMonitorID), string(jsonData))
-
-	req, err = http.NewRequest("PUT", putURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		log.Printf("Error creating PUT request for system monitor %s: %v", idToString(systemMonitorID), err)
-		return false
-	}
-
-	req.Header.Set("Authorization", "Bearer "+GetConfigAPIKey())
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err = httpClient.Do(req)
-	if err != nil {
-		log.Printf("Error unlicensing system monitor %s: %v", idToString(systemMonitorID), err)
-		return false
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
-		log.Printf("Successfully unlicensed system monitor %s", idToString(systemMonitorID))
-		log.Printf("DEBUG: Agent %s unlicensing completed successfully", idToString(systemMonitorID))
-		return true
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		log.Printf("PATCH /lr-admin-api/agents returned %d — SMA retirement API not available (pre-7.22)", resp.StatusCode)
+		smaRetirementSupported = false
 	} else {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		log.Printf("Failed to unlicense system monitor %s, status: %d", idToString(systemMonitorID), resp.StatusCode)
-		log.Printf("DEBUG: Agent %s unlicensing failed with response: %s", idToString(systemMonitorID), string(bodyBytes))
-		return false
+		log.Printf("PATCH /lr-admin-api/agents returned %d — SMA retirement API available", resp.StatusCode)
+		smaRetirementSupported = true
 	}
 }
 
-func retireSystemMonitor(systemMonitorID interface{}) bool {
-	log.Printf("DEBUG: Starting retireSystemMonitor for agent %s", idToString(systemMonitorID))
-	// First, GET the system monitor to get the complete object
-	getURL := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(systemMonitorID))
-	log.Printf("DEBUG: GET URL for agent %s: %s", idToString(systemMonitorID), getURL)
+// retireSystemMonitorPatch retires an agent using PATCH /lr-admin-api/agents (7.22+).
+func retireSystemMonitorPatch(systemMonitorID interface{}) bool {
+	agentIDStr := idToString(systemMonitorID)
+	log.Printf("DEBUG: Retiring agent %s via PATCH /lr-admin-api/agents", agentIDStr)
 
-	req, err := http.NewRequest("GET", getURL, nil)
+	url := fmt.Sprintf("https://%s:%d/lr-admin-api/agents", config.Hostname, config.Port)
+
+	type agentPatch struct {
+		AgentID      int    `json:"agentId"`
+		RecordStatus string `json:"recordStatus"`
+	}
+
+	agentIDInt := 0
+	switch v := systemMonitorID.(type) {
+	case float64:
+		agentIDInt = int(v)
+	case int:
+		agentIDInt = v
+	case json.Number:
+		n, _ := v.Int64()
+		agentIDInt = int(n)
+	default:
+		fmt.Sscanf(agentIDStr, "%d", &agentIDInt)
+	}
+
+	payload := []agentPatch{{AgentID: agentIDInt, RecordStatus: "Retired"}}
+	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("Error creating GET request for system monitor %s: %v", idToString(systemMonitorID), err)
+		log.Printf("Error marshaling PATCH payload for agent %s: %v", agentIDStr, err)
+		return false
+	}
+	log.Printf("DEBUG: PATCH payload for agent %s: %s", agentIDStr, string(jsonData))
+
+	req, err := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Error creating PATCH request for agent %s: %v", agentIDStr, err)
 		return false
 	}
 
@@ -2538,72 +2530,79 @@ func retireSystemMonitor(systemMonitorID interface{}) bool {
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		log.Printf("Error getting system monitor %s: %v", idToString(systemMonitorID), err)
+		log.Printf("Error executing PATCH for agent %s: %v", agentIDStr, err)
 		return false
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Failed to get system monitor %s, status: %d", idToString(systemMonitorID), resp.StatusCode)
-		return false
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		log.Printf("Successfully retired agent %s via PATCH", agentIDStr)
+		return true
 	}
 
-	// Parse the response
-	var systemMonitor map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&systemMonitor); err != nil {
-		log.Printf("Error decoding system monitor %s: %v", idToString(systemMonitorID), err)
-		return false
+	log.Printf("Failed to retire agent %s via PATCH, status: %d, response: %s", agentIDStr, resp.StatusCode, string(bodyBytes))
+	return false
+}
+
+// restoreSystemMonitorPatch restores an agent to Active using PATCH /lr-admin-api/agents (7.22+).
+func restoreSystemMonitorPatch(systemMonitorID interface{}, recordStatus string) bool {
+	agentIDStr := idToString(systemMonitorID)
+	log.Printf("DEBUG: Restoring agent %s to status '%s' via PATCH /lr-admin-api/agents", agentIDStr, recordStatus)
+
+	url := fmt.Sprintf("https://%s:%d/lr-admin-api/agents", config.Hostname, config.Port)
+
+	type agentPatch struct {
+		AgentID      int    `json:"agentId"`
+		RecordStatus string `json:"recordStatus"`
 	}
 
-	// Check if system monitor is already retired
-	if recordStatusName, ok := systemMonitor["recordStatusName"].(string); ok && recordStatusName == "Retired" {
-		log.Printf("System monitor %s is already retired, skipping retirement", idToString(systemMonitorID))
-		return true // Success - already retired
+	agentIDInt := 0
+	switch v := systemMonitorID.(type) {
+	case float64:
+		agentIDInt = int(v)
+	case int:
+		agentIDInt = v
+	case json.Number:
+		n, _ := v.Int64()
+		agentIDInt = int(n)
+	default:
+		fmt.Sscanf(agentIDStr, "%d", &agentIDInt)
 	}
 
-	// Modify the system monitor object to retire it
-	// Set recordStatusName to "Retired" and licenseType to "None"
-	log.Printf("DEBUG: Setting recordStatusName to 'Retired' and licenseType to 'None' for agent %s", idToString(systemMonitorID))
-	systemMonitor["recordStatusName"] = "Retired"
-	systemMonitor["licenseType"] = "None"
-
-	// PUT the updated system monitor back
-	putURL := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(systemMonitorID))
-	log.Printf("DEBUG: PUT URL for agent %s: %s", idToString(systemMonitorID), putURL)
-
-	jsonData, err := json.Marshal(systemMonitor)
+	payload := []agentPatch{{AgentID: agentIDInt, RecordStatus: recordStatus}}
+	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("Error marshaling updated system monitor %s: %v", idToString(systemMonitorID), err)
+		log.Printf("Error marshaling PATCH payload for agent %s: %v", agentIDStr, err)
 		return false
 	}
-	log.Printf("DEBUG: PUT payload for agent %s: %s", idToString(systemMonitorID), string(jsonData))
 
-	req, err = http.NewRequest("PUT", putURL, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		log.Printf("Error creating PUT request for system monitor %s: %v", idToString(systemMonitorID), err)
+		log.Printf("Error creating PATCH request for agent %s: %v", agentIDStr, err)
 		return false
 	}
 
 	req.Header.Set("Authorization", "Bearer "+GetConfigAPIKey())
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err = httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		log.Printf("Error updating system monitor %s: %v", idToString(systemMonitorID), err)
+		log.Printf("Error executing PATCH for agent %s: %v", agentIDStr, err)
 		return false
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusOK {
-		log.Printf("Successfully retired system monitor %s", idToString(systemMonitorID))
-		log.Printf("DEBUG: Agent %s retirement completed successfully", idToString(systemMonitorID))
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		log.Printf("Successfully restored agent %s to '%s' via PATCH", agentIDStr, recordStatus)
 		return true
-	} else {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		log.Printf("Failed to update system monitor %s, status: %d", idToString(systemMonitorID), resp.StatusCode)
-		log.Printf("DEBUG: Agent %s retirement failed with response: %s", idToString(systemMonitorID), string(bodyBytes))
-		return false
 	}
+
+	log.Printf("Failed to restore agent %s via PATCH, status: %d, response: %s", agentIDStr, resp.StatusCode, string(bodyBytes))
+	return false
 }
 
 func removeHostIdentifiers(hostID interface{}) []HostIdentifier {
@@ -3561,68 +3560,11 @@ func restoreHostIdentifiers(hostID interface{}, identifiers []HostIdentifier) bo
 }
 
 func rollbackSystemMonitor(change SystemMonitorRollback) bool {
-	// Get current system monitor data
-	url := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(change.SystemMonitorID))
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		log.Printf("Error creating GET request for system monitor %s: %v", idToString(change.SystemMonitorID), err)
+	if !smaRetirementSupported {
+		log.Printf("WARN: SMA retirement API not available (pre-7.22). Agent %s (%s) requires manual rollback to status '%s'.",
+			idToString(change.SystemMonitorID), change.SystemMonitorName, change.OriginalStatus)
 		return false
 	}
 
-	req.Header.Set("Authorization", "Bearer "+GetConfigAPIKey())
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		log.Printf("Error getting system monitor %s: %v", idToString(change.SystemMonitorID), err)
-		return false
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Failed to get system monitor %s, status: %d", idToString(change.SystemMonitorID), resp.StatusCode)
-		return false
-	}
-
-	var systemMonitor map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&systemMonitor); err != nil {
-		log.Printf("Error decoding system monitor %s: %v", idToString(change.SystemMonitorID), err)
-		return false
-	}
-
-	// Restore original values
-	systemMonitor["recordStatusName"] = change.OriginalStatus
-	systemMonitor["licenseType"] = change.OriginalLicenseType
-
-	// PUT the updated system monitor back
-	jsonData, err := json.Marshal(systemMonitor)
-	if err != nil {
-		log.Printf("Error marshaling updated system monitor %s: %v", idToString(change.SystemMonitorID), err)
-		return false
-	}
-
-	req, err = http.NewRequest("PUT", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		log.Printf("Error creating PUT request for system monitor %s: %v", idToString(change.SystemMonitorID), err)
-		return false
-	}
-
-	req.Header.Set("Authorization", "Bearer "+GetConfigAPIKey())
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err = httpClient.Do(req)
-	if err != nil {
-		log.Printf("Error updating system monitor %s: %v", idToString(change.SystemMonitorID), err)
-		return false
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
-		log.Printf("Successfully rolled back system monitor %s", idToString(change.SystemMonitorID))
-		return true
-	} else {
-		log.Printf("Failed to rollback system monitor %s, status: %d", idToString(change.SystemMonitorID), resp.StatusCode)
-		return false
-	}
+	return restoreSystemMonitorPatch(change.SystemMonitorID, change.OriginalStatus)
 }
