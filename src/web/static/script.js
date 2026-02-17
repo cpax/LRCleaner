@@ -18,28 +18,17 @@ console.log('Script execution started');
 function toggleSidebar() {
     const sidebar = document.getElementById('sidebar');
     const mainContent = document.getElementById('mainContent');
-    
+
     if (sidebar && mainContent) {
         // Check if we're on mobile
         const isMobile = window.innerWidth <= 768;
-        
+
         if (isMobile) {
-            // On mobile, toggle open/closed state
             sidebar.classList.toggle('open');
         } else {
-            // On desktop, toggle collapsed/expanded state
             sidebar.classList.toggle('collapsed');
         }
-        
-        // Update toggle button icon
-        const toggleIcon = sidebar.querySelector('.sidebar-toggle i');
-        if (toggleIcon) {
-            if (sidebar.classList.contains('collapsed') || sidebar.classList.contains('open')) {
-                toggleIcon.style.transform = 'rotate(180deg)';
-            } else {
-                toggleIcon.style.transform = 'rotate(0deg)';
-            }
-        }
+        // Chevron rotation is handled by CSS via .sidebar.collapsed class
     }
 }
 
@@ -125,13 +114,19 @@ function showSettingsSection() {
     const rollbackSection = document.getElementById('rollbackSection');
     const controlSection = document.querySelector('.control-section');
     const resultsSection = document.querySelector('.results-section');
-    
+
     if (analysisSection) analysisSection.style.display = 'none';
     if (rollbackSection) rollbackSection.style.display = 'none';
     if (controlSection) controlSection.style.display = 'none';
     if (resultsSection) resultsSection.style.display = 'none';
     if (settingsSection) settingsSection.style.display = 'block';
-    
+
+    // Update nav highlighting to show Settings as active
+    const navLinks = document.querySelectorAll('.nav-link');
+    navLinks.forEach(link => link.classList.remove('active'));
+    const settingsNav = document.getElementById('settingsNav');
+    if (settingsNav) settingsNav.classList.add('active');
+
     console.log('Showing settings section');
 }
 
@@ -957,24 +952,6 @@ function hideMainContent() {
     document.getElementById('mainContent').style.display = 'none';
 }
 
-function showSettingsSection() {
-    const settingsSection = document.getElementById('settingsSection');
-    if (settingsSection) {
-        settingsSection.style.display = 'block';
-        // Hide other sections
-        const analysisSection = document.getElementById('analysisSection');
-        const rollbackSection = document.getElementById('rollbackSection');
-        const controlSection = document.querySelector('.control-section');
-        const resultsSection = document.querySelector('.results-section');
-        
-        if (analysisSection) analysisSection.style.display = 'none';
-        if (rollbackSection) rollbackSection.style.display = 'none';
-        if (controlSection) controlSection.style.display = 'none';
-        if (resultsSection) resultsSection.style.display = 'none';
-    } else {
-        console.log('Settings section not found');
-    }
-}
 
 
 function openTestModal() {
