@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LRCleaner - LogRhythm Log Source Management</title>
-    <link rel="stylesheet" href="/static/style.css?v=4">
+    <link rel="stylesheet" href="/static/style.css?v=5">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
@@ -17,7 +17,6 @@
         </div>
         <nav class="sidebar-nav">
             <div class="nav-section">
-                <h3><i class="fas fa-tools"></i> <span class="sidebar-text">Operations</span></h3>
                 <ul>
                     <li><a href="#" id="analyzeNav" class="nav-link active" title="Analyze">
                         <i class="fas fa-chart-line"></i> <span class="sidebar-text">Analyze</span>
@@ -25,10 +24,6 @@
                     <li><a href="#" id="rollbackNav" class="nav-link" title="Rollback">
                         <i class="fas fa-undo"></i> <span class="sidebar-text">Rollback</span>
                     </a></li>
-                </ul>
-            </div>
-            <div class="nav-section">
-                <ul>
                     <li><a href="#" id="settingsNav" class="nav-link" title="Settings">
                         <i class="fas fa-cog"></i> <span class="sidebar-text">Settings</span>
                     </a></li>
@@ -184,6 +179,7 @@
         <!-- Control Section -->
         <section class="control-section">
             <div class="card">
+                <h2><i class="fas fa-chart-line"></i> Analysis</h2>
                 <div class="control-row">
                     <div class="date-picker-group">
                         <label for="mainDate">Last Log Message Date:</label>
@@ -193,25 +189,20 @@
                         <button id="applyModeBtn" class="btn btn-success" disabled>
                             <i class="fas fa-play"></i> Go
                         </button>
-                        <button id="applyBtn" class="btn btn-danger" disabled>
-                            <i class="fas fa-check"></i> Apply
-                        </button>
                         <button id="clearBtn" class="btn btn-secondary">
                             <i class="fas fa-trash"></i> Clear Results
                         </button>
+                        <button id="exportBtn" class="btn btn-primary" disabled>
+                            <i class="fas fa-download"></i> Export Results
+                        </button>
                     </div>
                 </div>
-            </div>
-        </section>
-
-        <!-- Progress Section -->
-        <section id="progressSection" class="progress-section" style="display: none;">
-            <div class="card">
-                <h2><i class="fas fa-tasks"></i> Analysis Progress</h2>
-                <div class="progress-container">
-                    <div id="jobStatus" class="job-status">Starting analysis...</div>
-                    <div class="progress-bar">
-                        <div id="progressFill" class="progress-fill"></div>
+                <div id="progressSection" class="inline-progress" style="display: none;">
+                    <div class="progress-container">
+                        <div id="jobStatus" class="job-status">Starting analysis...</div>
+                        <div class="progress-bar">
+                            <div id="progressFill" class="progress-fill"></div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -588,9 +579,6 @@
                         <button id="executeRetirementBtn" class="btn btn-warning" disabled>
                             <i class="fas fa-check"></i> Execute Retirement
                         </button>
-                        <button id="cancelRetirementBtn" class="btn btn-secondary">
-                            <i class="fas fa-times"></i> Cancel
-                        </button>
                     </div>
                 </div>
                 
@@ -602,13 +590,6 @@
                             </tr>
                         </tbody>
                     </table>
-                </div>
-                
-                <!-- Export Button -->
-                <div class="export-section" style="margin-top: 20px; text-align: center;">
-                    <button id="exportBtn" class="btn btn-primary" disabled>
-                        <i class="fas fa-download"></i> Export Results
-                    </button>
                 </div>
             </div>
         </section>
@@ -655,6 +636,6 @@
     <!-- Toast Notifications -->
     <div id="toastContainer" class="toast-container"></div>
 
-    <script src="/static/script.js?v=4"></script>
+    <script src="/static/script.js?v=5"></script>
 </body>
 </html>

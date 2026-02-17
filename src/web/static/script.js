@@ -330,9 +330,6 @@ function setupEventListeners() {
     const applyModeBtn = document.getElementById('applyModeBtn');
     if (applyModeBtn) applyModeBtn.addEventListener('click', startApplyMode);
     
-    const applyBtn = document.getElementById('applyBtn');
-    if (applyBtn) applyBtn.addEventListener('click', handleApply);
-    
     const exportBtn = document.getElementById('exportBtn');
     console.log('Export button found:', exportBtn);
     if (exportBtn) {
@@ -392,9 +389,6 @@ function setupEventListeners() {
     
     const executeRetirementBtn = document.getElementById('executeRetirementBtn');
     if (executeRetirementBtn) executeRetirementBtn.addEventListener('click', executeRetirement);
-    
-    const cancelRetirementBtn = document.getElementById('cancelRetirementBtn');
-    if (cancelRetirementBtn) cancelRetirementBtn.addEventListener('click', cancelRetirement);
     
     // Collection host modal
     const selectAllCollectionHosts = document.getElementById('selectAllCollectionHosts');
@@ -1059,12 +1053,6 @@ function startApplyMode() {
     });
 }
 
-function handleApply() {
-    // TODO: Implement apply functionality
-    console.log('Apply functionality not yet implemented');
-    showToast('Apply functionality will be implemented soon!', 'info');
-}
-
 function handleExport() {
     console.log('handleExport called');
     console.log('currentJobId:', currentJobId);
@@ -1168,7 +1156,7 @@ function populateCollectionHostList() {
                 <div class="host-details">
                     <div class="host-name">${host.systemMonitorName}</div>
                     <div class="host-meta">
-                        <span class="ping-status ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
+                        <span class="ping-chip ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
                         <span class="log-source-count">${host.logSourceCount} log sources</span>
                         ${isRecommended ? '<span class="recommended-badge">Recommended</span>' : ''}
                     </div>
@@ -1567,7 +1555,7 @@ function updateResultsTable() {
                 <div class="host-summary-content" onclick="toggleHostDetails('${hostId}')">
                     <span class="expand-icon" id="icon-${hostId}">▶</span>
                     <span class="host-name">${hostGroup.hostName}</span>
-                    <span class="ping-status ping-${(hostGroup.pingResult || 'unknown').toLowerCase()}">${hostGroup.pingResult || 'Unknown'}</span>
+                    <span class="ping-chip ping-${(hostGroup.pingResult || 'unknown').toLowerCase()}">${hostGroup.pingResult || 'Unknown'}</span>
                     <span class="log-source-count">${hostGroup.logSources.length} log source${hostGroup.logSources.length !== 1 ? 's' : ''}</span>
                 </div>
             </td>
@@ -1938,7 +1926,7 @@ function updateResultsTableForApplyMode() {
                 <div class="host-summary-content" onclick="toggleHostDetails('${hostId}')">
                     <span class="expand-icon" id="icon-${hostId}">▶</span>
                     <span class="host-name">${host.hostName}</span>
-                    <span class="ping-status ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
+                    <span class="ping-chip ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
                     <span class="log-source-count">${host.logSourceCount} log source${host.logSourceCount !== 1 ? 's' : ''}</span>
                     <span class="max-log-date">Last log: ${formatDate(host.maxLogDate)}</span>
                     ${isRecommended ? '<span class="recommended-badge">Recommended</span>' : ''}
@@ -2046,7 +2034,7 @@ function populateHostList() {
                     <div class="host-summary-content">
                         <span class="expand-icon" id="apply-icon-${hostId}">▶</span>
                         <span class="host-name">${host.hostName}</span>
-                        <span class="ping-status ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
+                        <span class="ping-chip ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
                         <span class="log-source-count">${host.logSourceCount} log source${host.logSourceCount !== 1 ? 's' : ''}</span>
                         <span class="max-log-date">Last log: ${formatDate(host.maxLogDate)}</span>
                         ${isRecommended ? '<span class="recommended-badge">Recommended</span>' : ''}
