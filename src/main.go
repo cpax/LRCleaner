@@ -381,14 +381,11 @@ func openBrowser(url string) {
 }
 
 func loadRollbackFiles() {
-	rollbackDir := config.Rollback.BackupLocation
-	if rollbackDir == "" {
-		rollbackDir = "./rollback/"
-	}
+	rollbackDir := rollbackPath()
 
-	// Check if rollback directory exists
-	if _, err := os.Stat(rollbackDir); os.IsNotExist(err) {
-		log.Printf("Rollback directory does not exist: %s", rollbackDir)
+	// Ensure the directory exists (creates it on first startup).
+	if err := os.MkdirAll(rollbackDir, 0755); err != nil {
+		log.Printf("Error creating rollback directory: %v", err)
 		return
 	}
 
@@ -553,7 +550,32 @@ func main() {
 	select {}
 }
 
+// rollbackPath returns the effective rollback directory, always resolved
+// relative to the executable so the folder travels with the binary.
+func rollbackPath() string {
+	loc := config.Rollback.BackupLocation
+	if loc == "" {
+		loc = "rollback"
+	}
+	// If already absolute, use as-is.
+	if filepath.IsAbs(loc) {
+		return loc
+	}
+	// Resolve relative to the directory of the running executable.
+	exePath, err := os.Executable()
+	if err != nil {
+		return loc
+	}
+	return filepath.Join(filepath.Dir(exePath), loc)
+}
+
 func loadConfig() *Config {
+	// Compute exe-relative default rollback path before anything else.
+	defaultRollbackPath := "rollback"
+	if exePath, err := os.Executable(); err == nil {
+		defaultRollbackPath = filepath.Join(filepath.Dir(exePath), "rollback")
+	}
+
 	config := &Config{
 		Hostname: "localhost",
 		Port:     8501,
@@ -568,7 +590,7 @@ func loadConfig() *Config {
 			RetentionDays:     30,
 			MaxRollbackPoints: 10,
 			AutoBackup:        true,
-			BackupLocation:    "./rollback/",
+			BackupLocation:    defaultRollbackPath,
 			ChecksumAlgorithm: "sha256",
 		},
 	}
@@ -605,6 +627,21 @@ func loadConfig() *Config {
 			config.Port = legacyConfig.Port
 			config.ExcludedLogSources = legacyConfig.ExcludedLogSources
 			config.Rollback = legacyConfig.Rollback
+
+			// Restore defaults for any zero-value rollback fields so a
+			// partially-written config.json doesn't silently break rollback.
+			if config.Rollback.BackupLocation == "" {
+				config.Rollback.BackupLocation = defaultRollbackPath
+			}
+			if config.Rollback.RetentionDays == 0 {
+				config.Rollback.RetentionDays = 30
+			}
+			if config.Rollback.MaxRollbackPoints == 0 {
+				config.Rollback.MaxRollbackPoints = 10
+			}
+			if config.Rollback.ChecksumAlgorithm == "" {
+				config.Rollback.ChecksumAlgorithm = "sha256"
+			}
 		} else {
 			log.Printf("Warning: Failed to parse config.json: %v", err)
 		}
@@ -3137,8 +3174,8 @@ func extractHostIdentifiers(hostData map[string]interface{}) []HostIdentifier {
 }
 
 func saveRollbackData(rollbackData *RollbackData) {
-	// Create rollback directory if it doesn't exist
-	rollbackDir := config.Rollback.BackupLocation
+	// Resolve the rollback directory (exe-relative, with fallback).
+	rollbackDir := rollbackPath()
 	if err := os.MkdirAll(rollbackDir, 0755); err != nil {
 		log.Printf("Error creating rollback directory: %v", err)
 		return
@@ -3266,7 +3303,7 @@ func handleDeleteRollback(w http.ResponseWriter, r *http.Request) {
 		filename := fmt.Sprintf("LRCleaner_rollback_%s_%s.json",
 			rollback.Timestamp.Format("20060102_150405"),
 			rollback.OperationType)
-		filepath := filepath.Join(config.Rollback.BackupLocation, filename)
+		filepath := filepath.Join(rollbackPath(), filename)
 		os.Remove(filepath)
 
 		// Remove from memory
