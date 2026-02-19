@@ -4,8 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LRCleaner - LogRhythm Log Source Management</title>
-    <link rel="stylesheet" href="/static/style.css?v=3">
+    <link rel="stylesheet" href="/static/style.css?v=5">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
     <!-- Collapsible Sidebar -->
@@ -16,7 +17,6 @@
         </div>
         <nav class="sidebar-nav">
             <div class="nav-section">
-                <h3><i class="fas fa-tools"></i> <span class="sidebar-text">Operations</span></h3>
                 <ul>
                     <li><a href="#" id="analyzeNav" class="nav-link active" title="Analyze">
                         <i class="fas fa-chart-line"></i> <span class="sidebar-text">Analyze</span>
@@ -24,10 +24,6 @@
                     <li><a href="#" id="rollbackNav" class="nav-link" title="Rollback">
                         <i class="fas fa-undo"></i> <span class="sidebar-text">Rollback</span>
                     </a></li>
-                </ul>
-            </div>
-            <div class="nav-section">
-                <ul>
                     <li><a href="#" id="settingsNav" class="nav-link" title="Settings">
                         <i class="fas fa-cog"></i> <span class="sidebar-text">Settings</span>
                     </a></li>
@@ -35,7 +31,7 @@
             </div>
         </nav>
         <button id="sidebarToggle" class="sidebar-toggle" title="Toggle Sidebar">
-            <i class="fas fa-chevron-right"></i>
+            <i class="fas fa-chevron-left"></i>
         </button>
     </div>
 
@@ -45,7 +41,14 @@
 
         <!-- Settings Section -->
         <div id="settingsSection" class="settings-section" style="display: none;">
+            <div class="settings-tabs">
+                <button class="settings-tab active" data-tab="connection"><i class="fas fa-plug"></i> Connection</button>
+                <button class="settings-tab" data-tab="backup"><i class="fas fa-database"></i> Database Backup</button>
+                <button class="settings-tab" data-tab="rollback"><i class="fas fa-undo"></i> Rollback</button>
+                <button class="settings-tab" data-tab="logging"><i class="fas fa-file-alt"></i> Logging</button>
+            </div>
             <!-- Configuration Section -->
+            <div class="settings-tab-panel active" data-tab="connection">
             <div class="card">
                 <h2><i class="fas fa-sliders-h"></i> Configuration</h2>
                 <form id="configForm">
@@ -88,7 +91,9 @@
                 <div id="configStatus" class="status-message"></div>
             </div>
 
+            </div>
             <!-- Database Backup Section -->
+            <div class="settings-tab-panel" data-tab="backup">
             <div class="card">
                 <h2><i class="fas fa-database"></i> Database Backup</h2>
                 <div class="backup-content">
@@ -109,6 +114,9 @@
                         </ol>
                     </div>
                     <div class="backup-actions">
+                        <button type="button" class="btn btn-primary" id="performBackupBtn">
+                            <i class="fas fa-database"></i> Backup Now
+                        </button>
                         <button type="button" class="btn btn-success" id="backupAcknowledgeBtn">
                             <i class="fas fa-check"></i> I Have Backed Up the Database
                         </button>
@@ -120,7 +128,9 @@
                 </div>
             </div>
 
+            </div>
             <!-- Rollback Configuration Section -->
+            <div class="settings-tab-panel" data-tab="rollback">
             <div class="card">
                 <h2><i class="fas fa-undo"></i> Rollback Configuration</h2>
                 <div class="rollback-config-content">
@@ -164,6 +174,39 @@
                     <div id="rollbackConfigStatus" class="status-message"></div>
                 </div>
             </div>
+            </div>
+            <!-- Logging Configuration Section -->
+            <div class="settings-tab-panel" data-tab="logging">
+            <div class="card">
+                <h2><i class="fas fa-file-alt"></i> Logging</h2>
+                <div class="logging-config-content">
+                    <p>Configure logging output for LRCleaner. Changes take effect after restarting the application.</p>
+                    <form id="loggingConfigForm">
+                        <div class="form-group">
+                            <label for="logLevel">Log Level:</label>
+                            <select id="logLevel" name="logLevel">
+                                <option value="debug">Debug</option>
+                                <option value="info" selected>Info (default)</option>
+                                <option value="warn">Warn</option>
+                                <option value="error">Error</option>
+                            </select>
+                            <small>Controls the minimum severity of messages written to the log</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="logFilePath">Log File Path:</label>
+                            <input type="text" id="logFilePath" name="logFilePath" placeholder="lrcleaner.log (leave blank for stdout only)">
+                            <small>Absolute or relative path to a log file. Leave blank to log to stdout only.</small>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-save"></i> Save Logging Settings
+                            </button>
+                        </div>
+                    </form>
+                    <div id="loggingConfigStatus" class="status-message"></div>
+                </div>
+            </div>
+            </div>
         </div>
 
         <!-- Analysis Section (default view) -->
@@ -172,6 +215,7 @@
         <!-- Control Section -->
         <section class="control-section">
             <div class="card">
+                <h2><i class="fas fa-chart-line"></i> Analysis</h2>
                 <div class="control-row">
                     <div class="date-picker-group">
                         <label for="mainDate">Last Log Message Date:</label>
@@ -181,25 +225,20 @@
                         <button id="applyModeBtn" class="btn btn-success" disabled>
                             <i class="fas fa-play"></i> Go
                         </button>
-                        <button id="applyBtn" class="btn btn-danger" disabled>
-                            <i class="fas fa-check"></i> Apply
-                        </button>
                         <button id="clearBtn" class="btn btn-secondary">
                             <i class="fas fa-trash"></i> Clear Results
                         </button>
+                        <button id="exportBtn" class="btn btn-primary" disabled>
+                            <i class="fas fa-download"></i> Export Results
+                        </button>
                     </div>
                 </div>
-            </div>
-        </section>
-
-        <!-- Progress Section -->
-        <section id="progressSection" class="progress-section" style="display: none;">
-            <div class="card">
-                <h2><i class="fas fa-tasks"></i> Analysis Progress</h2>
-                <div class="progress-container">
-                    <div id="jobStatus" class="job-status">Starting analysis...</div>
-                    <div class="progress-bar">
-                        <div id="progressFill" class="progress-fill"></div>
+                <div id="progressSection" class="inline-progress" style="display: none;">
+                    <div class="progress-container">
+                        <div id="jobStatus" class="job-status">Starting analysis...</div>
+                        <div class="progress-bar">
+                            <div id="progressFill" class="progress-fill"></div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -235,16 +274,22 @@
                 <div class="modal-body">
                     <div class="backup-info">
                         <p><strong>Backup Target:</strong> LogRhythmEMDB</p>
-                        <p><strong>User:</strong> logrhythmadmin</p>
+                        <p><strong>Auth:</strong> Windows Integrated (auto-detected; SA fallback if needed)</p>
                         <p><strong>Purpose:</strong> Create a backup before retiring log sources</p>
                     </div>
                     <div class="form-group">
-                        <label for="backupPassword">Password for logrhythmadmin:</label>
-                        <input type="password" id="backupPassword" name="backupPassword" placeholder="Enter password" required>
+                        <label for="backupLocation">Backup Location:</label>
+                        <input type="text" id="backupLocation" name="backupLocation" placeholder="C:\LogRhythm\Backup" value="C:\LogRhythm\Backup">
                     </div>
-                    <div class="form-group">
-                        <label for="backupLocation">Backup Location (optional):</label>
-                        <input type="text" id="backupLocation" name="backupLocation" placeholder="Default: C:\LogRhythm\Backup" value="C:\LogRhythm\Backup">
+                    <div id="saPasswordSection" style="display: none;">
+                        <div class="status-message warning" style="margin-bottom: 12px;">
+                            <i class="fas fa-exclamation-triangle"></i>
+                            Windows integrated authentication failed. Please enter the SA password to proceed.
+                        </div>
+                        <div class="form-group">
+                            <label for="saPassword">SA Password:</label>
+                            <input type="password" id="saPassword" name="saPassword" placeholder="Enter SA password">
+                        </div>
                     </div>
                     <div class="modal-actions">
                         <button id="executeBackupBtn" class="btn btn-primary">
@@ -254,6 +299,7 @@
                             <i class="fas fa-times"></i> Cancel
                         </button>
                     </div>
+                    <div id="backupModalStatus" class="status-message" style="margin-top: 12px;"></div>
                 </div>
             </div>
         </div>
@@ -576,9 +622,6 @@
                         <button id="executeRetirementBtn" class="btn btn-warning" disabled>
                             <i class="fas fa-check"></i> Execute Retirement
                         </button>
-                        <button id="cancelRetirementBtn" class="btn btn-secondary">
-                            <i class="fas fa-times"></i> Cancel
-                        </button>
                     </div>
                 </div>
                 
@@ -590,13 +633,6 @@
                             </tr>
                         </tbody>
                     </table>
-                </div>
-                
-                <!-- Export Button -->
-                <div class="export-section" style="margin-top: 20px; text-align: center;">
-                    <button id="exportBtn" class="btn btn-primary" disabled>
-                        <i class="fas fa-download"></i> Export Results
-                    </button>
                 </div>
             </div>
         </section>
@@ -643,6 +679,6 @@
     <!-- Toast Notifications -->
     <div id="toastContainer" class="toast-container"></div>
 
-    <script src="/static/script.js?v=3"></script>
+    <script src="/static/script.js?v=5"></script>
 </body>
 </html>

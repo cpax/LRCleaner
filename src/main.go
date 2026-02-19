@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -43,7 +44,13 @@ type Config struct {
 	Port               int            `json:"port"`
 	ExcludedLogSources []string       `json:"excludedLogSources"`
 	Rollback           RollbackConfig `json:"rollback"`
+	Logging            LoggingConfig  `json:"logging"`
 	// APIKey is now stored securely in OS credential store
+}
+
+type LoggingConfig struct {
+	Level    string `json:"level"`    // "debug", "info", "warn", "error"
+	FilePath string `json:"filePath"` // "" = stdout only
 }
 
 // LogRhythm API structures
@@ -102,8 +109,8 @@ type ApplyRequest struct {
 }
 
 type BackupRequest struct {
-	Password string `json:"password"`
-	Location string `json:"location"`
+	Location   string `json:"location"`
+	SAPassword string `json:"saPassword"` // optional; only sent if Windows auth fails
 }
 
 type RetirementRecord struct {
@@ -217,7 +224,36 @@ var (
 	// Rollback management
 	rollbackHistory = make(map[string]*RollbackData)
 	rollbackMutex   sync.RWMutex
+	// SMA retirement API support (PATCH /lr-admin-api/agents requires 7.22+)
+	smaRetirementSupported bool
+	// Logging
+	logLevel int // 0=debug, 1=info, 2=warn, 3=error
 )
+
+// errSARequired signals that Windows integrated auth failed and SA creds are needed.
+var errSARequired = fmt.Errorf("sa_required")
+
+// Leveled logger functions — thin wrappers around the standard log package.
+func logDebug(format string, v ...interface{}) {
+	if logLevel <= 0 {
+		log.Printf("DEBUG: "+format, v...)
+	}
+}
+func logInfo(format string, v ...interface{}) {
+	if logLevel <= 1 {
+		log.Printf("INFO: "+format, v...)
+	}
+}
+func logWarn(format string, v ...interface{}) {
+	if logLevel <= 2 {
+		log.Printf("WARN: "+format, v...)
+	}
+}
+func logError(format string, v ...interface{}) {
+	if logLevel <= 3 {
+		log.Printf("ERROR: "+format, v...)
+	}
+}
 
 // Credential Manager - Cross-platform secure storage
 const (
@@ -254,7 +290,7 @@ func StoreAPIKey(apiKey string) error {
 		return fmt.Errorf("failed to store API key: %v", err)
 	}
 
-	log.Println("API key stored securely in OS credential store")
+	logInfo("API key stored securely in OS credential store")
 	return nil
 }
 
@@ -285,7 +321,7 @@ func DeleteAPIKey() error {
 		return fmt.Errorf("failed to delete API key: %v", err)
 	}
 
-	log.Println("API key removed from OS credential store")
+	logInfo("API key removed from OS credential store")
 	return nil
 }
 
@@ -299,7 +335,7 @@ func HasAPIKey() bool {
 func GetConfigAPIKey() string {
 	apiKey, err := GetAPIKey()
 	if err != nil {
-		log.Printf("Warning: Failed to get API key from credential store: %v", err)
+		logWarn("Failed to get API key from credential store: %v", err)
 		return ""
 	}
 	return apiKey
@@ -310,9 +346,10 @@ func findAvailablePort() int {
 	fmt.Println("================================================")
 	fmt.Println()
 
-	// Check for command line argument first
-	if len(os.Args) > 1 {
-		if port, err := strconv.Atoi(os.Args[1]); err == nil && port > 0 && port <= 65535 {
+	// Check for first non-flag command line argument (port number)
+	args := flag.Args()
+	if len(args) > 0 {
+		if port, err := strconv.Atoi(args[0]); err == nil && port > 0 && port <= 65535 {
 			if isPortAvailable(port) {
 				fmt.Printf("Using port %d from command line argument\n", port)
 				return port
@@ -379,49 +416,55 @@ func openBrowser(url string) {
 }
 
 func loadRollbackFiles() {
-	rollbackDir := config.Rollback.BackupLocation
-	if rollbackDir == "" {
-		rollbackDir = "./rollback/"
-	}
+	rollbackDir := rollbackPath()
 
-	// Check if rollback directory exists
-	if _, err := os.Stat(rollbackDir); os.IsNotExist(err) {
-		log.Printf("Rollback directory does not exist: %s", rollbackDir)
+	// Ensure the directory exists (creates it on first startup).
+	if err := os.MkdirAll(rollbackDir, 0755); err != nil {
+		logError("Error creating rollback directory: %v", err)
 		return
 	}
 
 	// Read all JSON files in the rollback directory
 	files, err := filepath.Glob(filepath.Join(rollbackDir, "*.json"))
 	if err != nil {
-		log.Printf("Error reading rollback directory: %v", err)
+		logError("Error reading rollback directory: %v", err)
 		return
 	}
 
-	log.Printf("Found %d rollback files to load", len(files))
+	logInfo("Found %d rollback files to load", len(files))
 
 	loadedCount := 0
 	for _, file := range files {
 		// Read the file
 		data, err := os.ReadFile(file)
 		if err != nil {
-			log.Printf("Error reading rollback file %s: %v", file, err)
+			logError("Error reading rollback file %s: %v", file, err)
 			continue
 		}
 
 		// Parse the rollback data
 		var rollbackData RollbackData
 		if err := json.Unmarshal(data, &rollbackData); err != nil {
-			log.Printf("Error parsing rollback file %s: %v", file, err)
+			logError("Error parsing rollback file %s: %v", file, err)
 			continue
 		}
 
 		// Verify checksum if present
 		if rollbackData.Checksum != "" {
-			expectedChecksum := calculateChecksum(data)
-			if rollbackData.Checksum != expectedChecksum {
-				log.Printf("Checksum mismatch for rollback file %s, skipping", file)
+			savedChecksum := rollbackData.Checksum
+			// Recalculate checksum the same way it was created: with an empty checksum field
+			rollbackData.Checksum = ""
+			jsonForChecksum, err := json.Marshal(&rollbackData)
+			if err != nil {
+				logError("Error re-marshaling rollback data for checksum verification %s: %v", file, err)
 				continue
 			}
+			expectedChecksum := calculateChecksum(jsonForChecksum)
+			if savedChecksum != expectedChecksum {
+				logWarn("Checksum mismatch for rollback file %s, skipping", file)
+				continue
+			}
+			rollbackData.Checksum = savedChecksum
 		}
 
 		// Store in memory
@@ -430,15 +473,45 @@ func loadRollbackFiles() {
 		rollbackMutex.Unlock()
 
 		loadedCount++
-		log.Printf("Loaded rollback file: %s (ID: %s)", file, rollbackData.ID)
+		logDebug("Loaded rollback file: %s (ID: %s)", file, rollbackData.ID)
 	}
 
-	log.Printf("Successfully loaded %d rollback files", loadedCount)
+	logInfo("Successfully loaded %d rollback files", loadedCount)
 }
 
 func main() {
+	// Define and parse CLI flags (must happen before loadConfig and findAvailablePort)
+	loglevelFlag := flag.String("loglevel", "", "Log level: debug, info, warn, error")
+	flag.Parse()
+
 	// Initialize configuration
 	config = loadConfig()
+
+	// Resolve log level: CLI flag wins over config
+	resolvedLevel := config.Logging.Level
+	if *loglevelFlag != "" {
+		resolvedLevel = *loglevelFlag
+	}
+	switch strings.ToLower(resolvedLevel) {
+	case "debug":
+		logLevel = 0
+	case "warn":
+		logLevel = 2
+	case "error":
+		logLevel = 3
+	default: // "info" or unrecognized
+		logLevel = 1
+	}
+
+	// Set up log file output if configured
+	if config.Logging.FilePath != "" {
+		logFile, err := os.OpenFile(config.Logging.FilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			log.Printf("WARN: Failed to open log file %s: %v", config.Logging.FilePath, err)
+		} else {
+			log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+		}
+	}
 
 	// Find available port (tries 8080 first, then 8000-8443)
 	port := findAvailablePort()
@@ -542,7 +615,32 @@ func main() {
 	select {}
 }
 
+// rollbackPath returns the effective rollback directory, always resolved
+// relative to the executable so the folder travels with the binary.
+func rollbackPath() string {
+	loc := config.Rollback.BackupLocation
+	if loc == "" {
+		loc = "rollback"
+	}
+	// If already absolute, use as-is.
+	if filepath.IsAbs(loc) {
+		return loc
+	}
+	// Resolve relative to the directory of the running executable.
+	exePath, err := os.Executable()
+	if err != nil {
+		return loc
+	}
+	return filepath.Join(filepath.Dir(exePath), loc)
+}
+
 func loadConfig() *Config {
+	// Compute exe-relative default rollback path before anything else.
+	defaultRollbackPath := "rollback"
+	if exePath, err := os.Executable(); err == nil {
+		defaultRollbackPath = filepath.Join(filepath.Dir(exePath), "rollback")
+	}
+
 	config := &Config{
 		Hostname: "localhost",
 		Port:     8501,
@@ -557,8 +655,12 @@ func loadConfig() *Config {
 			RetentionDays:     30,
 			MaxRollbackPoints: 10,
 			AutoBackup:        true,
-			BackupLocation:    "./rollback/",
+			BackupLocation:    defaultRollbackPath,
 			ChecksumAlgorithm: "sha256",
+		},
+		Logging: LoggingConfig{
+			Level:    "info",
+			FilePath: "",
 		},
 	}
 
@@ -571,6 +673,7 @@ func loadConfig() *Config {
 			Port               int            `json:"port"`
 			ExcludedLogSources []string       `json:"excludedLogSources"`
 			Rollback           RollbackConfig `json:"rollback"`
+			Logging            LoggingConfig  `json:"logging"`
 		}
 
 		var legacyConfig LegacyConfig
@@ -578,9 +681,9 @@ func loadConfig() *Config {
 			// Migrate API key to credential store if it exists in legacy config
 			if legacyConfig.APIKey != "" {
 				if err := StoreAPIKey(legacyConfig.APIKey); err != nil {
-					log.Printf("Warning: Failed to migrate API key to credential store: %v", err)
+					log.Printf("Warning: Failed to migrate API key to credential store: %v", err) // log.Printf intentional: logLevel not set yet
 				} else {
-					log.Println("API key migrated from config.json to OS credential store")
+					log.Println("API key migrated from config.json to OS credential store") // log.Println intentional: logLevel not set yet
 					// Remove API key from config file
 					legacyConfig.APIKey = ""
 					if updatedData, err := json.MarshalIndent(legacyConfig, "", "  "); err == nil {
@@ -594,8 +697,29 @@ func loadConfig() *Config {
 			config.Port = legacyConfig.Port
 			config.ExcludedLogSources = legacyConfig.ExcludedLogSources
 			config.Rollback = legacyConfig.Rollback
+			config.Logging = legacyConfig.Logging
+
+			// Restore defaults for any zero-value rollback fields so a
+			// partially-written config.json doesn't silently break rollback.
+			if config.Rollback.BackupLocation == "" {
+				config.Rollback.BackupLocation = defaultRollbackPath
+			}
+			if config.Rollback.RetentionDays == 0 {
+				config.Rollback.RetentionDays = 30
+			}
+			if config.Rollback.MaxRollbackPoints == 0 {
+				config.Rollback.MaxRollbackPoints = 10
+			}
+			if config.Rollback.ChecksumAlgorithm == "" {
+				config.Rollback.ChecksumAlgorithm = "sha256"
+			}
+
+			// Restore defaults for logging
+			if config.Logging.Level == "" {
+				config.Logging.Level = "info"
+			}
 		} else {
-			log.Printf("Warning: Failed to parse config.json: %v", err)
+			log.Printf("Warning: Failed to parse config.json: %v", err) // log.Printf intentional: logLevel not set yet
 		}
 	}
 
@@ -618,6 +742,7 @@ type ConfigResponse struct {
 	Port               int            `json:"port"`
 	ExcludedLogSources []string       `json:"excludedLogSources"`
 	Rollback           RollbackConfig `json:"rollback"`
+	Logging            LoggingConfig  `json:"logging"`
 	HasAPIKey          bool           `json:"hasApiKey"`
 }
 
@@ -630,28 +755,54 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 			Port:               config.Port,
 			ExcludedLogSources: config.ExcludedLogSources,
 			Rollback:           config.Rollback,
+			Logging:            config.Logging,
 			HasAPIKey:          HasAPIKey(),
 		}
 		json.NewEncoder(w).Encode(response)
 	case "POST":
 		var requestData struct {
-			Hostname string `json:"hostname"`
-			Port     int    `json:"port"`
-			APIKey   string `json:"apiKey"`
+			Hostname string          `json:"hostname"`
+			Port     int             `json:"port"`
+			APIKey   string          `json:"apiKey"`
+			Rollback *RollbackConfig `json:"rollback"`
+			Logging  *LoggingConfig  `json:"logging"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
 			return
 		}
 
-		// Update config with new values
-		config.Hostname = requestData.Hostname
-		config.Port = requestData.Port
+		// Update config with new values (only non-zero fields)
+		if requestData.Hostname != "" {
+			config.Hostname = requestData.Hostname
+		}
+		if requestData.Port != 0 {
+			config.Port = requestData.Port
+		}
+		if requestData.Rollback != nil {
+			config.Rollback = *requestData.Rollback
+			// Restore defaults for zero-value fields
+			if config.Rollback.RetentionDays == 0 {
+				config.Rollback.RetentionDays = 30
+			}
+			if config.Rollback.MaxRollbackPoints == 0 {
+				config.Rollback.MaxRollbackPoints = 10
+			}
+			if config.Rollback.ChecksumAlgorithm == "" {
+				config.Rollback.ChecksumAlgorithm = "sha256"
+			}
+		}
+		if requestData.Logging != nil {
+			config.Logging = *requestData.Logging
+			if config.Logging.Level == "" {
+				config.Logging.Level = "info"
+			}
+		}
 
 		// Save API key to credential store if provided and not already stored
 		if requestData.APIKey != "" && requestData.APIKey != "***STORED***" {
 			if err := StoreAPIKey(requestData.APIKey); err != nil {
-				log.Printf("Error storing API key: %v", err)
+				logError("Error storing API key: %v", err)
 				http.Error(w, "Failed to store API key", http.StatusInternalServerError)
 				return
 			}
@@ -660,12 +811,12 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		// Save config to file (without API key)
 		data, err := json.MarshalIndent(config, "", "  ")
 		if err != nil {
-			log.Printf("Error marshaling config: %v", err)
+			logError("Error marshaling config: %v", err)
 			http.Error(w, "Failed to save configuration", http.StatusInternalServerError)
 			return
 		}
 		if err := os.WriteFile("config.json", data, 0644); err != nil {
-			log.Printf("Error writing config file: %v", err)
+			logError("Error writing config file: %v", err)
 			http.Error(w, "Failed to save configuration", http.StatusInternalServerError)
 			return
 		}
@@ -702,7 +853,7 @@ func handleAPIKey(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := StoreAPIKey(request.APIKey); err != nil {
-			log.Printf("Error storing API key: %v", err)
+			logError("Error storing API key: %v", err)
 			http.Error(w, "Failed to store API key", http.StatusInternalServerError)
 			return
 		}
@@ -713,7 +864,7 @@ func handleAPIKey(w http.ResponseWriter, r *http.Request) {
 	case "DELETE":
 		// Remove API key
 		if err := DeleteAPIKey(); err != nil {
-			log.Printf("Error deleting API key: %v", err)
+			logError("Error deleting API key: %v", err)
 			http.Error(w, "Failed to delete API key", http.StatusInternalServerError)
 			return
 		}
@@ -727,7 +878,7 @@ func handleAPIKeyValue(w http.ResponseWriter, r *http.Request) {
 	// Get the actual API key value
 	apiKey, err := GetAPIKey()
 	if err != nil {
-		log.Printf("Error retrieving API key: %v", err)
+		logError("Error retrieving API key: %v", err)
 		http.Error(w, "Failed to retrieve API key", http.StatusInternalServerError)
 		return
 	}
@@ -888,15 +1039,17 @@ func handleBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Password == "" {
-		http.Error(w, "Password is required", http.StatusBadRequest)
-		return
-	}
-
-	// Perform SQL backup
-	success, err := performSQLBackup(req.Password, req.Location)
+	success, err := performSQLBackup(req.SAPassword, req.Location)
 	if err != nil {
-		log.Printf("Backup error: %v", err)
+		if err == errSARequired {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":  "sa_required",
+				"message": "Windows integrated auth insufficient; please provide the SA password",
+			})
+			return
+		}
+		logError("Backup error: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
@@ -912,37 +1065,72 @@ func handleBackup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func performSQLBackup(password, location string) (bool, error) {
-	// SQL Server connection string
-	// Assuming LogRhythmEMDB is on localhost with default instance
-	connectionString := fmt.Sprintf("server=localhost;user id=logrhythmadmin;password=%s;database=LogRhythmEMDB;encrypt=disable", password)
-
-	// Open database connection
-	db, err := sql.Open("mssql", connectionString)
-	if err != nil {
-		return false, fmt.Errorf("failed to connect to database: %v", err)
+// sanitizeBackupLocation validates a backup path to prevent SQL injection.
+func sanitizeBackupLocation(location string) error {
+	for _, ch := range location {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
+			ch == '\\' || ch == '/' || ch == ':' || ch == '_' || ch == '-' || ch == '.' || ch == ' ') {
+			return fmt.Errorf("invalid character in backup location: %c", ch)
+		}
 	}
-	defer db.Close()
-
-	// Test connection
-	if err := db.Ping(); err != nil {
-		return false, fmt.Errorf("failed to ping database: %v", err)
+	if strings.Contains(location, "'") || strings.Contains(location, ";") || strings.Contains(location, "--") {
+		return fmt.Errorf("backup location contains disallowed characters")
 	}
+	return nil
+}
 
-	// Create backup filename with timestamp
+// execSQLBackup runs the BACKUP DATABASE statement against an already-connected db.
+func execSQLBackup(db *sql.DB, location string) (bool, error) {
 	timestamp := time.Now().Format("20060102_150405")
 	backupFile := fmt.Sprintf("%s\\LogRhythmEMDB_backup_%s.bak", location, timestamp)
 
-	// Execute backup command
-	backupQuery := fmt.Sprintf("BACKUP DATABASE [LogRhythmEMDB] TO DISK = '%s' WITH FORMAT, INIT, NAME = 'LogRhythmEMDB Full Backup', SKIP, NOREWIND, NOUNLOAD, STATS = 10", backupFile)
-
-	_, err = db.Exec(backupQuery)
+	backupQuery := "BACKUP DATABASE [LogRhythmEMDB] TO DISK = @backupPath WITH FORMAT, INIT, NAME = 'LogRhythmEMDB Full Backup', SKIP, NOREWIND, NOUNLOAD, STATS = 10"
+	_, err := db.Exec("EXEC sp_executesql @stmt=N'"+backupQuery+"', @params=N'@backupPath NVARCHAR(500)', @backupPath=@p1", backupFile)
 	if err != nil {
-		return false, fmt.Errorf("failed to execute backup: %v", err)
+		// Fallback: direct execution with the sanitized (already validated) path
+		directQuery := fmt.Sprintf("BACKUP DATABASE [LogRhythmEMDB] TO DISK = N'%s' WITH FORMAT, INIT, NAME = 'LogRhythmEMDB Full Backup', SKIP, NOREWIND, NOUNLOAD, STATS = 10", backupFile)
+		_, err = db.Exec(directQuery)
+		if err != nil {
+			return false, fmt.Errorf("failed to execute backup: %v", err)
+		}
 	}
 
-	log.Printf("Database backup completed successfully: %s", backupFile)
+	logInfo("Database backup completed successfully: %s", backupFile)
 	return true, nil
+}
+
+func performSQLBackup(saPassword, location string) (bool, error) {
+	if err := sanitizeBackupLocation(location); err != nil {
+		return false, err
+	}
+
+	// 1. Try Windows Integrated Authentication (Administrators group)
+	winConnStr := "sqlserver://localhost?trusted_connection=yes&database=LogRhythmEMDB"
+	if winDB, err := sql.Open("mssql", winConnStr); err == nil {
+		if pingErr := winDB.Ping(); pingErr == nil {
+			defer winDB.Close()
+			return execSQLBackup(winDB, location)
+		}
+		winDB.Close()
+	}
+
+	// 2. Windows auth failed — try SA fallback
+	if saPassword == "" {
+		return false, errSARequired
+	}
+
+	saConnStr := fmt.Sprintf("sqlserver://sa:%s@localhost?database=LogRhythmEMDB", saPassword)
+	saDB, err := sql.Open("mssql", saConnStr)
+	if err != nil {
+		return false, fmt.Errorf("failed to open SA connection: %v", err)
+	}
+	defer saDB.Close()
+
+	if err := saDB.Ping(); err != nil {
+		return false, fmt.Errorf("SA authentication failed: %v", err)
+	}
+
+	return execSQLBackup(saDB, location)
 }
 
 func handleApplyMode(w http.ResponseWriter, r *http.Request) {
@@ -1127,13 +1315,13 @@ func handleExport(w http.ResponseWriter, r *http.Request) {
 	csv := "LogSourceID,HostID,HostName,LogSourceName,LogSourceType,MaxLogDate,PingResult\n"
 	for _, result := range resultsToExport {
 		csv += fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s\n",
-			idToString(result.ID),
-			idToString(result.HostID),
-			result.HostName,
-			result.Name,
-			result.LogSourceType,
-			result.MaxLogDate,
-			result.PingResult)
+			csvEscape(idToString(result.ID)),
+			csvEscape(idToString(result.HostID)),
+			csvEscape(result.HostName),
+			csvEscape(result.Name),
+			csvEscape(result.LogSourceType),
+			csvEscape(result.MaxLogDate),
+			csvEscape(result.PingResult))
 	}
 
 	log.Printf("Generated CSV for job %s, length: %d bytes", jobID, len(csv))
@@ -1168,19 +1356,27 @@ func handleJobStatus(w http.ResponseWriter, r *http.Request) {
 // Broadcast job update to all WebSocket connections
 func broadcastJobUpdate(job *JobStatus) {
 	wsMutex.RLock()
-	defer wsMutex.RUnlock()
-
 	log.Printf("Broadcasting job update for job %s to %d WebSocket connections", job.ID, len(wsConnections))
 
+	var failedConns []*websocket.Conn
 	for conn := range wsConnections {
 		if err := conn.WriteJSON(job); err != nil {
 			log.Printf("Error broadcasting job update via WebSocket: %v", err)
-			// Remove failed connection
-			delete(wsConnections, conn)
-			conn.Close()
+			failedConns = append(failedConns, conn)
 		} else {
 			log.Printf("Successfully broadcasted job update to WebSocket connection")
 		}
+	}
+	wsMutex.RUnlock()
+
+	// Remove failed connections with a write lock
+	if len(failedConns) > 0 {
+		wsMutex.Lock()
+		for _, conn := range failedConns {
+			delete(wsConnections, conn)
+			conn.Close()
+		}
+		wsMutex.Unlock()
 	}
 }
 
@@ -1433,9 +1629,9 @@ func getAllLogSources() ([]LogSource, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
 			return nil, fmt.Errorf("API request failed with status: %d", resp.StatusCode)
 		}
 
@@ -1447,6 +1643,7 @@ func getAllLogSources() ([]LogSource, error) {
 
 		// Read the response body
 		bodyBytes, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			return nil, err
 		}
@@ -1554,6 +1751,24 @@ func containsIgnoreCase(s, substr string) bool {
 	s = strings.ToLower(s)
 	substr = strings.ToLower(substr)
 	return strings.Contains(s, substr)
+}
+
+// csvEscape escapes a string for safe inclusion in a CSV field.
+// It quotes fields containing commas, quotes, or newlines, and
+// prefixes formula-triggering characters to prevent CSV injection.
+func csvEscape(s string) string {
+	// Prevent CSV formula injection
+	if len(s) > 0 {
+		switch s[0] {
+		case '=', '+', '-', '@', '\t', '\r':
+			s = "'" + s
+		}
+	}
+	// Quote the field if it contains special characters
+	if strings.ContainsAny(s, ",\"\n\r") {
+		s = "\"" + strings.ReplaceAll(s, "\"", "\"\"") + "\""
+	}
+	return s
 }
 
 // Helper function to convert interface{} ID to string
@@ -1848,24 +2063,29 @@ func analyzeCollectionHosts(jobID string) []CollectionHostAnalysis {
 		log.Printf("Processing recommended collection hosts for retirement...")
 		retiredCount := 0
 
+		var manualRetirementAgents []string
 		for _, ch := range collectionHostAnalysis {
 			if ch.Recommended {
 				log.Printf("Processing collection host %s (ID: %s) for retirement...", ch.SystemMonitorName, idToString(ch.SystemMonitorID))
 
-				// First unlicense the system monitor
-				if unlicenseSystemMonitor(ch.SystemMonitorID) {
-					log.Printf("  ✓ Successfully unlicensed collection host: %s", ch.SystemMonitorName)
-
-					// Then retire the system monitor
-					if retireSystemMonitor(ch.SystemMonitorID) {
+				if smaRetirementSupported {
+					if retireSystemMonitorPatch(ch.SystemMonitorID) {
 						retiredCount++
 						log.Printf("  ✓ Successfully retired collection host: %s", ch.SystemMonitorName)
 					} else {
 						log.Printf("  ✗ Failed to retire collection host: %s", ch.SystemMonitorName)
 					}
 				} else {
-					log.Printf("  ✗ Failed to unlicense collection host: %s", ch.SystemMonitorName)
+					log.Printf("WARN: SMA retirement not supported (pre-7.22 API). Agent %s (%s) requires manual retirement.",
+						idToString(ch.SystemMonitorID), ch.SystemMonitorName)
+					manualRetirementAgents = append(manualRetirementAgents, fmt.Sprintf("%s (ID: %s)", ch.SystemMonitorName, idToString(ch.SystemMonitorID)))
 				}
+			}
+		}
+		if len(manualRetirementAgents) > 0 {
+			log.Printf("WARN: The following collection host agents require manual retirement (API pre-7.22):")
+			for _, a := range manualRetirementAgents {
+				log.Printf("  - %s", a)
 			}
 		}
 
@@ -1881,6 +2101,9 @@ func executeRetirement(jobID string, selectedHosts []string) {
 	jobsMutex.Lock()
 	job := jobs[jobID]
 	jobsMutex.Unlock()
+
+	// Detect whether PATCH /lr-admin-api/agents is available (7.22+)
+	checkSMARetirementSupport()
 
 	// Create rollback data before starting retirement
 	rollbackData := createRollbackData(jobID, selectedHosts)
@@ -2029,11 +2252,15 @@ func executeRetirement(jobID string, selectedHosts []string) {
 			log.Printf("System monitor agent %s has no active log sources, proceeding with retirement...", agentID)
 
 			// Retire the system monitor agent
-			if retireSystemMonitor(agentID) {
-				retiredAgents++
-				log.Printf("  ✓ Successfully retired system monitor agent: %s", agentID)
+			if smaRetirementSupported {
+				if retireSystemMonitorPatch(agentID) {
+					retiredAgents++
+					log.Printf("  ✓ Successfully retired system monitor agent: %s", agentID)
+				} else {
+					log.Printf("  ✗ Failed to retire system monitor agent: %s", agentID)
+				}
 			} else {
-				log.Printf("  ✗ Failed to retire system monitor agent: %s", agentID)
+				log.Printf("WARN: SMA retirement not supported (pre-7.22 API). Agent %s requires manual retirement.", agentID)
 			}
 		} else {
 			log.Printf("System monitor agent %s still has active log sources, skipping agent retirement", agentID)
@@ -2077,14 +2304,10 @@ func executeRetirement(jobID string, selectedHosts []string) {
 				log.Printf("Found system monitor agent %s associated with host %s", systemMonitorID, hostID)
 				log.Printf("DEBUG: About to retire agent %s before retiring host %s", systemMonitorID, hostID)
 
-				// First unlicense the system monitor
-				log.Printf("DEBUG: Calling unlicenseSystemMonitor for agent %s", systemMonitorID)
-				if unlicenseSystemMonitor(systemMonitorID) {
-					log.Printf("  ✓ Successfully unlicensed system monitor agent: %s", systemMonitorID)
-
-					// Then retire the system monitor
-					log.Printf("DEBUG: Calling retireSystemMonitor for agent %s", systemMonitorID)
-					if retireSystemMonitor(systemMonitorID) {
+				// Retire the system monitor agent
+				if smaRetirementSupported {
+					log.Printf("DEBUG: Calling retireSystemMonitorPatch for agent %s", systemMonitorID)
+					if retireSystemMonitorPatch(systemMonitorID) {
 						log.Printf("  ✓ Successfully retired system monitor agent: %s", systemMonitorID)
 						log.Printf("DEBUG: Agent %s retirement completed successfully", systemMonitorID)
 					} else {
@@ -2092,8 +2315,7 @@ func executeRetirement(jobID string, selectedHosts []string) {
 						log.Printf("DEBUG: Agent %s retirement failed, but continuing with host retirement", systemMonitorID)
 					}
 				} else {
-					log.Printf("  ✗ Failed to unlicense system monitor agent: %s", systemMonitorID)
-					log.Printf("DEBUG: Agent %s unlicensing failed, but continuing with host retirement", systemMonitorID)
+					log.Printf("WARN: SMA retirement not supported (pre-7.22 API). Agent %s requires manual retirement.", systemMonitorID)
 				}
 			} else {
 				log.Printf("No system monitor agent found for host %s", hostID)
@@ -2392,16 +2614,17 @@ func checkHostHasActiveLogSources(hostID interface{}) bool {
 	return hasActiveLogSources
 }
 
-func unlicenseSystemMonitor(systemMonitorID interface{}) bool {
-	log.Printf("DEBUG: Starting unlicenseSystemMonitor for agent %s", idToString(systemMonitorID))
-	// First, GET the system monitor to get the complete object
-	getURL := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(systemMonitorID))
-	log.Printf("DEBUG: GET URL for agent %s: %s", idToString(systemMonitorID), getURL)
+// checkSMARetirementSupport probes whether PATCH /lr-admin-api/agents is available (7.22+).
+// It sends a PATCH with an empty array — a no-op that returns 200 on 7.22+ and 404/405 on older versions.
+func checkSMARetirementSupport() {
+	url := fmt.Sprintf("https://%s:%d/lr-admin-api/agents", config.Hostname, config.Port)
+	body := []byte("[]") // empty array = no-op
 
-	req, err := http.NewRequest("GET", getURL, nil)
+	req, err := http.NewRequest("PATCH", url, bytes.NewBuffer(body))
 	if err != nil {
-		log.Printf("Error creating GET request for system monitor %s: %v", idToString(systemMonitorID), err)
-		return false
+		log.Printf("WARN: Could not create PATCH probe request: %v — assuming SMA retirement unsupported", err)
+		smaRetirementSupported = false
+		return
 	}
 
 	req.Header.Set("Authorization", "Bearer "+GetConfigAPIKey())
@@ -2409,76 +2632,58 @@ func unlicenseSystemMonitor(systemMonitorID interface{}) bool {
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		log.Printf("Error getting system monitor %s: %v", idToString(systemMonitorID), err)
-		return false
+		log.Printf("WARN: PATCH /lr-admin-api/agents probe failed: %v — assuming SMA retirement unsupported", err)
+		smaRetirementSupported = false
+		return
 	}
 	defer resp.Body.Close()
+	io.ReadAll(resp.Body) // drain
 
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Failed to get system monitor %s, status: %d", idToString(systemMonitorID), resp.StatusCode)
-		return false
-	}
-
-	// Parse the response
-	var systemMonitor map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&systemMonitor); err != nil {
-		log.Printf("Error decoding system monitor %s: %v", idToString(systemMonitorID), err)
-		return false
-	}
-
-	// Modify the system monitor object to unlicense it
-	// Set recordStatusName to "Unlicensed" (this is the LogRhythm way to unlicense)
-	log.Printf("DEBUG: Setting recordStatusName to 'Unlicensed' for agent %s", idToString(systemMonitorID))
-	systemMonitor["recordStatusName"] = "Unlicensed"
-
-	// PUT the updated system monitor back
-	putURL := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(systemMonitorID))
-	log.Printf("DEBUG: PUT URL for agent %s: %s", idToString(systemMonitorID), putURL)
-
-	jsonData, err := json.Marshal(systemMonitor)
-	if err != nil {
-		log.Printf("Error marshaling updated system monitor %s: %v", idToString(systemMonitorID), err)
-		return false
-	}
-	log.Printf("DEBUG: PUT payload for agent %s: %s", idToString(systemMonitorID), string(jsonData))
-
-	req, err = http.NewRequest("PUT", putURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		log.Printf("Error creating PUT request for system monitor %s: %v", idToString(systemMonitorID), err)
-		return false
-	}
-
-	req.Header.Set("Authorization", "Bearer "+GetConfigAPIKey())
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err = httpClient.Do(req)
-	if err != nil {
-		log.Printf("Error unlicensing system monitor %s: %v", idToString(systemMonitorID), err)
-		return false
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
-		log.Printf("Successfully unlicensed system monitor %s", idToString(systemMonitorID))
-		log.Printf("DEBUG: Agent %s unlicensing completed successfully", idToString(systemMonitorID))
-		return true
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		log.Printf("PATCH /lr-admin-api/agents returned %d — SMA retirement API not available (pre-7.22)", resp.StatusCode)
+		smaRetirementSupported = false
 	} else {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		log.Printf("Failed to unlicense system monitor %s, status: %d", idToString(systemMonitorID), resp.StatusCode)
-		log.Printf("DEBUG: Agent %s unlicensing failed with response: %s", idToString(systemMonitorID), string(bodyBytes))
-		return false
+		log.Printf("PATCH /lr-admin-api/agents returned %d — SMA retirement API available", resp.StatusCode)
+		smaRetirementSupported = true
 	}
 }
 
-func retireSystemMonitor(systemMonitorID interface{}) bool {
-	log.Printf("DEBUG: Starting retireSystemMonitor for agent %s", idToString(systemMonitorID))
-	// First, GET the system monitor to get the complete object
-	getURL := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(systemMonitorID))
-	log.Printf("DEBUG: GET URL for agent %s: %s", idToString(systemMonitorID), getURL)
+// retireSystemMonitorPatch retires an agent using PATCH /lr-admin-api/agents (7.22+).
+func retireSystemMonitorPatch(systemMonitorID interface{}) bool {
+	agentIDStr := idToString(systemMonitorID)
+	log.Printf("DEBUG: Retiring agent %s via PATCH /lr-admin-api/agents", agentIDStr)
 
-	req, err := http.NewRequest("GET", getURL, nil)
+	url := fmt.Sprintf("https://%s:%d/lr-admin-api/agents", config.Hostname, config.Port)
+
+	type agentPatch struct {
+		AgentID      int    `json:"agentId"`
+		RecordStatus string `json:"recordStatus"`
+	}
+
+	agentIDInt := 0
+	switch v := systemMonitorID.(type) {
+	case float64:
+		agentIDInt = int(v)
+	case int:
+		agentIDInt = v
+	case json.Number:
+		n, _ := v.Int64()
+		agentIDInt = int(n)
+	default:
+		fmt.Sscanf(agentIDStr, "%d", &agentIDInt)
+	}
+
+	payload := []agentPatch{{AgentID: agentIDInt, RecordStatus: "Retired"}}
+	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("Error creating GET request for system monitor %s: %v", idToString(systemMonitorID), err)
+		log.Printf("Error marshaling PATCH payload for agent %s: %v", agentIDStr, err)
+		return false
+	}
+	log.Printf("DEBUG: PATCH payload for agent %s: %s", agentIDStr, string(jsonData))
+
+	req, err := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Error creating PATCH request for agent %s: %v", agentIDStr, err)
 		return false
 	}
 
@@ -2487,72 +2692,79 @@ func retireSystemMonitor(systemMonitorID interface{}) bool {
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		log.Printf("Error getting system monitor %s: %v", idToString(systemMonitorID), err)
+		log.Printf("Error executing PATCH for agent %s: %v", agentIDStr, err)
 		return false
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Failed to get system monitor %s, status: %d", idToString(systemMonitorID), resp.StatusCode)
-		return false
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		log.Printf("Successfully retired agent %s via PATCH", agentIDStr)
+		return true
 	}
 
-	// Parse the response
-	var systemMonitor map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&systemMonitor); err != nil {
-		log.Printf("Error decoding system monitor %s: %v", idToString(systemMonitorID), err)
-		return false
+	log.Printf("Failed to retire agent %s via PATCH, status: %d, response: %s", agentIDStr, resp.StatusCode, string(bodyBytes))
+	return false
+}
+
+// restoreSystemMonitorPatch restores an agent to Active using PATCH /lr-admin-api/agents (7.22+).
+func restoreSystemMonitorPatch(systemMonitorID interface{}, recordStatus string) bool {
+	agentIDStr := idToString(systemMonitorID)
+	log.Printf("DEBUG: Restoring agent %s to status '%s' via PATCH /lr-admin-api/agents", agentIDStr, recordStatus)
+
+	url := fmt.Sprintf("https://%s:%d/lr-admin-api/agents", config.Hostname, config.Port)
+
+	type agentPatch struct {
+		AgentID      int    `json:"agentId"`
+		RecordStatus string `json:"recordStatus"`
 	}
 
-	// Check if system monitor is already retired
-	if recordStatusName, ok := systemMonitor["recordStatusName"].(string); ok && recordStatusName == "Retired" {
-		log.Printf("System monitor %s is already retired, skipping retirement", idToString(systemMonitorID))
-		return true // Success - already retired
+	agentIDInt := 0
+	switch v := systemMonitorID.(type) {
+	case float64:
+		agentIDInt = int(v)
+	case int:
+		agentIDInt = v
+	case json.Number:
+		n, _ := v.Int64()
+		agentIDInt = int(n)
+	default:
+		fmt.Sscanf(agentIDStr, "%d", &agentIDInt)
 	}
 
-	// Modify the system monitor object to retire it
-	// Set recordStatusName to "Retired" and licenseType to "None"
-	log.Printf("DEBUG: Setting recordStatusName to 'Retired' and licenseType to 'None' for agent %s", idToString(systemMonitorID))
-	systemMonitor["recordStatusName"] = "Retired"
-	systemMonitor["licenseType"] = "None"
-
-	// PUT the updated system monitor back
-	putURL := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(systemMonitorID))
-	log.Printf("DEBUG: PUT URL for agent %s: %s", idToString(systemMonitorID), putURL)
-
-	jsonData, err := json.Marshal(systemMonitor)
+	payload := []agentPatch{{AgentID: agentIDInt, RecordStatus: recordStatus}}
+	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("Error marshaling updated system monitor %s: %v", idToString(systemMonitorID), err)
+		log.Printf("Error marshaling PATCH payload for agent %s: %v", agentIDStr, err)
 		return false
 	}
-	log.Printf("DEBUG: PUT payload for agent %s: %s", idToString(systemMonitorID), string(jsonData))
 
-	req, err = http.NewRequest("PUT", putURL, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		log.Printf("Error creating PUT request for system monitor %s: %v", idToString(systemMonitorID), err)
+		log.Printf("Error creating PATCH request for agent %s: %v", agentIDStr, err)
 		return false
 	}
 
 	req.Header.Set("Authorization", "Bearer "+GetConfigAPIKey())
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err = httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		log.Printf("Error updating system monitor %s: %v", idToString(systemMonitorID), err)
+		log.Printf("Error executing PATCH for agent %s: %v", agentIDStr, err)
 		return false
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusOK {
-		log.Printf("Successfully retired system monitor %s", idToString(systemMonitorID))
-		log.Printf("DEBUG: Agent %s retirement completed successfully", idToString(systemMonitorID))
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		log.Printf("Successfully restored agent %s to '%s' via PATCH", agentIDStr, recordStatus)
 		return true
-	} else {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		log.Printf("Failed to update system monitor %s, status: %d", idToString(systemMonitorID), resp.StatusCode)
-		log.Printf("DEBUG: Agent %s retirement failed with response: %s", idToString(systemMonitorID), string(bodyBytes))
-		return false
 	}
+
+	log.Printf("Failed to restore agent %s via PATCH, status: %d, response: %s", agentIDStr, resp.StatusCode, string(bodyBytes))
+	return false
 }
 
 func removeHostIdentifiers(hostID interface{}) []HostIdentifier {
@@ -3087,21 +3299,28 @@ func extractHostIdentifiers(hostData map[string]interface{}) []HostIdentifier {
 }
 
 func saveRollbackData(rollbackData *RollbackData) {
-	// Create rollback directory if it doesn't exist
-	rollbackDir := config.Rollback.BackupLocation
+	// Resolve the rollback directory (exe-relative, with fallback).
+	rollbackDir := rollbackPath()
 	if err := os.MkdirAll(rollbackDir, 0755); err != nil {
 		log.Printf("Error creating rollback directory: %v", err)
 		return
 	}
 
-	// Calculate checksum
-	jsonData, err := json.Marshal(rollbackData)
+	// Calculate checksum on data with empty checksum field, then set it
+	rollbackData.Checksum = ""
+	jsonForChecksum, err := json.Marshal(rollbackData)
+	if err != nil {
+		log.Printf("Error marshaling rollback data for checksum: %v", err)
+		return
+	}
+	rollbackData.Checksum = calculateChecksum(jsonForChecksum)
+
+	// Re-marshal with the checksum included for saving
+	jsonData, err := json.MarshalIndent(rollbackData, "", "  ")
 	if err != nil {
 		log.Printf("Error marshaling rollback data: %v", err)
 		return
 	}
-
-	rollbackData.Checksum = calculateChecksum(jsonData)
 
 	// Save to file
 	filename := fmt.Sprintf("LRCleaner_rollback_%s_%s.json",
@@ -3209,7 +3428,7 @@ func handleDeleteRollback(w http.ResponseWriter, r *http.Request) {
 		filename := fmt.Sprintf("LRCleaner_rollback_%s_%s.json",
 			rollback.Timestamp.Format("20060102_150405"),
 			rollback.OperationType)
-		filepath := filepath.Join(config.Rollback.BackupLocation, filename)
+		filepath := filepath.Join(rollbackPath(), filename)
 		os.Remove(filepath)
 
 		// Remove from memory
@@ -3503,68 +3722,11 @@ func restoreHostIdentifiers(hostID interface{}, identifiers []HostIdentifier) bo
 }
 
 func rollbackSystemMonitor(change SystemMonitorRollback) bool {
-	// Get current system monitor data
-	url := fmt.Sprintf("https://%s:%d/lr-admin-api/agents/%s", config.Hostname, config.Port, idToString(change.SystemMonitorID))
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		log.Printf("Error creating GET request for system monitor %s: %v", idToString(change.SystemMonitorID), err)
+	if !smaRetirementSupported {
+		log.Printf("WARN: SMA retirement API not available (pre-7.22). Agent %s (%s) requires manual rollback to status '%s'.",
+			idToString(change.SystemMonitorID), change.SystemMonitorName, change.OriginalStatus)
 		return false
 	}
 
-	req.Header.Set("Authorization", "Bearer "+GetConfigAPIKey())
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		log.Printf("Error getting system monitor %s: %v", idToString(change.SystemMonitorID), err)
-		return false
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Failed to get system monitor %s, status: %d", idToString(change.SystemMonitorID), resp.StatusCode)
-		return false
-	}
-
-	var systemMonitor map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&systemMonitor); err != nil {
-		log.Printf("Error decoding system monitor %s: %v", idToString(change.SystemMonitorID), err)
-		return false
-	}
-
-	// Restore original values
-	systemMonitor["recordStatusName"] = change.OriginalStatus
-	systemMonitor["licenseType"] = change.OriginalLicenseType
-
-	// PUT the updated system monitor back
-	jsonData, err := json.Marshal(systemMonitor)
-	if err != nil {
-		log.Printf("Error marshaling updated system monitor %s: %v", idToString(change.SystemMonitorID), err)
-		return false
-	}
-
-	req, err = http.NewRequest("PUT", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		log.Printf("Error creating PUT request for system monitor %s: %v", idToString(change.SystemMonitorID), err)
-		return false
-	}
-
-	req.Header.Set("Authorization", "Bearer "+GetConfigAPIKey())
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err = httpClient.Do(req)
-	if err != nil {
-		log.Printf("Error updating system monitor %s: %v", idToString(change.SystemMonitorID), err)
-		return false
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
-		log.Printf("Successfully rolled back system monitor %s", idToString(change.SystemMonitorID))
-		return true
-	} else {
-		log.Printf("Failed to rollback system monitor %s, status: %d", idToString(change.SystemMonitorID), resp.StatusCode)
-		return false
-	}
+	return restoreSystemMonitorPatch(change.SystemMonitorID, change.OriginalStatus)
 }

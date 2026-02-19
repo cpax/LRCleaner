@@ -18,28 +18,17 @@ console.log('Script execution started');
 function toggleSidebar() {
     const sidebar = document.getElementById('sidebar');
     const mainContent = document.getElementById('mainContent');
-    
+
     if (sidebar && mainContent) {
         // Check if we're on mobile
         const isMobile = window.innerWidth <= 768;
-        
+
         if (isMobile) {
-            // On mobile, toggle open/closed state
             sidebar.classList.toggle('open');
         } else {
-            // On desktop, toggle collapsed/expanded state
             sidebar.classList.toggle('collapsed');
         }
-        
-        // Update toggle button icon
-        const toggleIcon = sidebar.querySelector('.sidebar-toggle i');
-        if (toggleIcon) {
-            if (sidebar.classList.contains('collapsed') || sidebar.classList.contains('open')) {
-                toggleIcon.style.transform = 'rotate(180deg)';
-            } else {
-                toggleIcon.style.transform = 'rotate(0deg)';
-            }
-        }
+        // Chevron rotation is handled by CSS via .sidebar.collapsed class
     }
 }
 
@@ -109,6 +98,15 @@ function showAnalysisSection() {
     console.log('Showing analysis section');
 }
 
+function switchSettingsTab(tabName) {
+    document.querySelectorAll('.settings-tab').forEach(function(t) {
+        t.classList.toggle('active', t.getAttribute('data-tab') === tabName);
+    });
+    document.querySelectorAll('.settings-tab-panel').forEach(function(p) {
+        p.classList.toggle('active', p.getAttribute('data-tab') === tabName);
+    });
+}
+
 function showSettingsSection() {
     // Hide analysis section and rollback section, show settings section
     const settingsSection = document.getElementById('settingsSection');
@@ -116,13 +114,19 @@ function showSettingsSection() {
     const rollbackSection = document.getElementById('rollbackSection');
     const controlSection = document.querySelector('.control-section');
     const resultsSection = document.querySelector('.results-section');
-    
+
     if (analysisSection) analysisSection.style.display = 'none';
     if (rollbackSection) rollbackSection.style.display = 'none';
     if (controlSection) controlSection.style.display = 'none';
     if (resultsSection) resultsSection.style.display = 'none';
     if (settingsSection) settingsSection.style.display = 'block';
-    
+
+    // Update nav highlighting to show Settings as active
+    const navLinks = document.querySelectorAll('.nav-link');
+    navLinks.forEach(link => link.classList.remove('active'));
+    const settingsNav = document.getElementById('settingsNav');
+    if (settingsNav) settingsNav.classList.add('active');
+
     console.log('Showing settings section');
 }
 
@@ -213,6 +217,13 @@ function initializeApp() {
     // Load current configuration
     loadConfiguration();
     
+    // Setup settings tab listeners
+    document.querySelectorAll('.settings-tab').forEach(function(tab) {
+        tab.addEventListener('click', function() {
+            switchSettingsTab(this.getAttribute('data-tab'));
+        });
+    });
+
     // Setup event listeners
     console.log('Setting up event listeners...');
     setupEventListeners();
@@ -319,9 +330,6 @@ function setupEventListeners() {
     const applyModeBtn = document.getElementById('applyModeBtn');
     if (applyModeBtn) applyModeBtn.addEventListener('click', startApplyMode);
     
-    const applyBtn = document.getElementById('applyBtn');
-    if (applyBtn) applyBtn.addEventListener('click', handleApply);
-    
     const exportBtn = document.getElementById('exportBtn');
     console.log('Export button found:', exportBtn);
     if (exportBtn) {
@@ -381,9 +389,6 @@ function setupEventListeners() {
     
     const executeRetirementBtn = document.getElementById('executeRetirementBtn');
     if (executeRetirementBtn) executeRetirementBtn.addEventListener('click', executeRetirement);
-    
-    const cancelRetirementBtn = document.getElementById('cancelRetirementBtn');
-    if (cancelRetirementBtn) cancelRetirementBtn.addEventListener('click', cancelRetirement);
     
     // Collection host modal
     const selectAllCollectionHosts = document.getElementById('selectAllCollectionHosts');
@@ -532,6 +537,10 @@ function setupEventListeners() {
     // Rollback configuration form
     const rollbackConfigForm = document.getElementById('rollbackConfigForm');
     if (rollbackConfigForm) rollbackConfigForm.addEventListener('submit', handleRollbackConfigSubmit);
+
+    // Logging configuration form
+    const loggingConfigForm = document.getElementById('loggingConfigForm');
+    if (loggingConfigForm) loggingConfigForm.addEventListener('submit', handleLoggingConfigSubmit);
 }
 
 function loadConfiguration() {
@@ -554,6 +563,14 @@ function loadConfiguration() {
             
             document.getElementById('hostname').value = config.hostname || '';
             document.getElementById('port').value = config.port || 8501;
+
+            // Populate logging config fields
+            if (config.logging) {
+                const logLevelEl = document.getElementById('logLevel');
+                if (logLevelEl) logLevelEl.value = config.logging.level || 'info';
+                const logFilePathEl = document.getElementById('logFilePath');
+                if (logFilePathEl) logFilePathEl.value = config.logging.filePath || '';
+            }
             
             // Handle API key from credential store
             const apiKeyInput = document.getElementById('apiKey');
@@ -941,24 +958,6 @@ function hideMainContent() {
     document.getElementById('mainContent').style.display = 'none';
 }
 
-function showSettingsSection() {
-    const settingsSection = document.getElementById('settingsSection');
-    if (settingsSection) {
-        settingsSection.style.display = 'block';
-        // Hide other sections
-        const analysisSection = document.getElementById('analysisSection');
-        const rollbackSection = document.getElementById('rollbackSection');
-        const controlSection = document.querySelector('.control-section');
-        const resultsSection = document.querySelector('.results-section');
-        
-        if (analysisSection) analysisSection.style.display = 'none';
-        if (rollbackSection) rollbackSection.style.display = 'none';
-        if (controlSection) controlSection.style.display = 'none';
-        if (resultsSection) resultsSection.style.display = 'none';
-    } else {
-        console.log('Settings section not found');
-    }
-}
 
 
 function openTestModal() {
@@ -1066,12 +1065,6 @@ function startApplyMode() {
     });
 }
 
-function handleApply() {
-    // TODO: Implement apply functionality
-    console.log('Apply functionality not yet implemented');
-    showToast('Apply functionality will be implemented soon!', 'info');
-}
-
 function handleExport() {
     console.log('handleExport called');
     console.log('currentJobId:', currentJobId);
@@ -1175,7 +1168,7 @@ function populateCollectionHostList() {
                 <div class="host-details">
                     <div class="host-name">${host.systemMonitorName}</div>
                     <div class="host-meta">
-                        <span class="ping-status ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
+                        <span class="ping-chip ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
                         <span class="log-source-count">${host.logSourceCount} log sources</span>
                         ${isRecommended ? '<span class="recommended-badge">Recommended</span>' : ''}
                     </div>
@@ -1574,7 +1567,7 @@ function updateResultsTable() {
                 <div class="host-summary-content" onclick="toggleHostDetails('${hostId}')">
                     <span class="expand-icon" id="icon-${hostId}">▶</span>
                     <span class="host-name">${hostGroup.hostName}</span>
-                    <span class="ping-status ping-${(hostGroup.pingResult || 'unknown').toLowerCase()}">${hostGroup.pingResult || 'Unknown'}</span>
+                    <span class="ping-chip ping-${(hostGroup.pingResult || 'unknown').toLowerCase()}">${hostGroup.pingResult || 'Unknown'}</span>
                     <span class="log-source-count">${hostGroup.logSources.length} log source${hostGroup.logSources.length !== 1 ? 's' : ''}</span>
                 </div>
             </td>
@@ -1803,6 +1796,13 @@ function openApplyModal() {
 
 function openBackupModal() {
     closeAllModals();
+    // Reset SA password section on each open
+    const saSection = document.getElementById('saPasswordSection');
+    if (saSection) saSection.style.display = 'none';
+    const saPasswordInput = document.getElementById('saPassword');
+    if (saPasswordInput) saPasswordInput.value = '';
+    const statusDiv = document.getElementById('backupModalStatus');
+    if (statusDiv) { statusDiv.textContent = ''; statusDiv.className = 'status-message'; }
     document.getElementById('backupModal').style.display = 'block';
 }
 
@@ -1817,36 +1817,45 @@ function backToBackupModal() {
 }
 
 function executeBackup() {
-    const password = document.getElementById('backupPassword').value;
-    const location = document.getElementById('backupLocation').value;
-    
-    if (!password) {
-        showToast('Please enter the password for logrhythmadmin', 'error');
-        return;
-    }
-    
-    closeAllModals();
+    const location = document.getElementById('backupLocation').value || 'C:\\LogRhythm\\Backup';
+    const saPasswordInput = document.getElementById('saPassword');
+    const saPassword = saPasswordInput ? saPasswordInput.value : '';
+    const saSection = document.getElementById('saPasswordSection');
+    const statusDiv = document.getElementById('backupModalStatus');
+
     showLoadingOverlay();
-    
+
     fetch('/api/backup', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ 
-            password: password,
-            location: location || 'C:\\LogRhythm\\Backup'
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location, saPassword })
     })
     .then(response => response.json())
     .then(data => {
+        hideLoadingOverlay();
         if (data.success) {
+            // Clear SA password from memory immediately
+            if (saPasswordInput) saPasswordInput.value = '';
+            if (saSection) saSection.style.display = 'none';
+            closeAllModals();
             showToast('Database backup completed successfully', 'success');
             openApplyConfigModal();
+        } else if (data.status === 'sa_required') {
+            // Show SA password field for retry
+            if (saSection) saSection.style.display = 'block';
+            if (statusDiv) {
+                statusDiv.textContent = '';
+                statusDiv.className = 'status-message';
+            }
         } else {
-            showToast(data.error || 'Backup failed', 'error');
+            const msg = data.error || 'Backup failed';
+            if (statusDiv) {
+                statusDiv.textContent = msg;
+                statusDiv.className = 'status-message error';
+            } else {
+                showToast(msg, 'error');
+            }
         }
-        hideLoadingOverlay();
     })
     .catch(error => {
         console.error('Error performing backup:', error);
@@ -1945,7 +1954,7 @@ function updateResultsTableForApplyMode() {
                 <div class="host-summary-content" onclick="toggleHostDetails('${hostId}')">
                     <span class="expand-icon" id="icon-${hostId}">▶</span>
                     <span class="host-name">${host.hostName}</span>
-                    <span class="ping-status ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
+                    <span class="ping-chip ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
                     <span class="log-source-count">${host.logSourceCount} log source${host.logSourceCount !== 1 ? 's' : ''}</span>
                     <span class="max-log-date">Last log: ${formatDate(host.maxLogDate)}</span>
                     ${isRecommended ? '<span class="recommended-badge">Recommended</span>' : ''}
@@ -2053,7 +2062,7 @@ function populateHostList() {
                     <div class="host-summary-content">
                         <span class="expand-icon" id="apply-icon-${hostId}">▶</span>
                         <span class="host-name">${host.hostName}</span>
-                        <span class="ping-status ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
+                        <span class="ping-chip ping-${(host.pingResult || 'unknown').toLowerCase()}">${host.pingResult || 'Unknown'}</span>
                         <span class="log-source-count">${host.logSourceCount} log source${host.logSourceCount !== 1 ? 's' : ''}</span>
                         <span class="max-log-date">Last log: ${formatDate(host.maxLogDate)}</span>
                         ${isRecommended ? '<span class="recommended-badge">Recommended</span>' : ''}
@@ -2124,12 +2133,14 @@ function updateHostSelection(hostId, selected) {
     
     console.log('Updated selectedHosts:', selectedHosts);
     
-    // Update visual state
+    // Update visual state and clear indeterminate (explicit host check/uncheck)
     const hostItem = document.querySelector(`[data-host-id="${hostId}"]`);
     if (hostItem) {
         hostItem.classList.toggle('selected', selected);
+        const hostCheckbox = hostItem.querySelector('input[type="checkbox"]');
+        if (hostCheckbox) hostCheckbox.indeterminate = false;
     }
-    
+
     // Automatically select/deselect all log sources under this host
     const host = hostAnalysis.find(h => String(h.hostId) === String(hostId));
     if (host && host.logSources) {
@@ -2163,11 +2174,11 @@ function updateHostSelection(hostId, selected) {
         });
     }
     
-    // Update execute button - always enabled
+    // Update execute button - enabled only when hosts are selected
     const executeBtn = document.getElementById('executeRetirementBtn');
     if (executeBtn) {
-        executeBtn.disabled = false; // Always enabled
-        console.log('Execute button always enabled, selected hosts count:', selectedHosts.length);
+        executeBtn.disabled = selectedHosts.length === 0;
+        console.log('Execute button disabled:', executeBtn.disabled, ', selected hosts count:', selectedHosts.length);
     } else {
         console.error('Execute button element not found!');
     }
@@ -2178,7 +2189,7 @@ function updateHostSelection(hostId, selected) {
 
 function updateLogSourceSelection(logSourceId, selected) {
     console.log('updateLogSourceSelection called with:', logSourceId, selected);
-    
+
     if (selected) {
         if (!selectedLogSources.includes(logSourceId)) {
             selectedLogSources.push(logSourceId);
@@ -2186,15 +2197,52 @@ function updateLogSourceSelection(logSourceId, selected) {
     } else {
         selectedLogSources = selectedLogSources.filter(id => id !== logSourceId);
     }
-    
+
     console.log('Updated selectedLogSources:', selectedLogSources);
-    
+
+    // Find the parent host for this log source
+    const parentHost = hostAnalysis.find(h =>
+        h.logSources && h.logSources.some(ls => String(ls.id) === String(logSourceId))
+    );
+
+    if (parentHost) {
+        const parentHostId = String(parentHost.hostId);
+        const allChildIds = parentHost.logSources.map(ls => String(ls.id));
+        const allChildrenSelected = allChildIds.every(id => selectedLogSources.includes(id));
+        const someChildrenSelected = allChildIds.some(id => selectedLogSources.includes(id));
+
+        const hostRow = document.querySelector(`[data-host-id="${parentHostId}"]`);
+        const hostCheckbox = hostRow ? hostRow.querySelector('input[type="checkbox"]') : null;
+
+        if (allChildrenSelected) {
+            // All children selected → parent fully checked
+            if (!selectedHosts.includes(parentHostId)) {
+                selectedHosts.push(parentHostId);
+                if (hostRow) hostRow.classList.add('selected');
+            }
+            if (hostCheckbox) { hostCheckbox.checked = true; hostCheckbox.indeterminate = false; }
+            console.log('Auto-selected parent host:', parentHostId);
+        } else if (someChildrenSelected) {
+            // Some children selected → indeterminate parent
+            selectedHosts = selectedHosts.filter(id => id !== parentHostId);
+            if (hostRow) hostRow.classList.remove('selected');
+            if (hostCheckbox) { hostCheckbox.checked = false; hostCheckbox.indeterminate = true; }
+            console.log('Partial selection — indeterminate parent host:', parentHostId);
+        } else {
+            // No children selected → parent unchecked
+            selectedHosts = selectedHosts.filter(id => id !== parentHostId);
+            if (hostRow) hostRow.classList.remove('selected');
+            if (hostCheckbox) { hostCheckbox.checked = false; hostCheckbox.indeterminate = false; }
+            console.log('Auto-deselected parent host:', parentHostId);
+        }
+    }
+
     // Update execute button state
     const executeBtn = document.getElementById('executeRetirementBtn');
     if (executeBtn) {
-        executeBtn.disabled = (selectedHosts.length === 0 && selectedLogSources.length === 0);
+        executeBtn.disabled = selectedHosts.length === 0;
     }
-    
+
     // Update host summary
     updateHostSummary();
 }
@@ -2227,11 +2275,10 @@ function updateHostSummary() {
     }, 0);
     
     summary.innerHTML = `
-        <strong>Summary:</strong> ${totalHosts} total hosts | 
-        ${recommendedHosts} recommended | 
-        ${selectedHosts.length} hosts selected | 
-        ${selectedLogSources.length} log sources selected | 
-        ${totalLogSources + selectedLogSources.length} total items will be retired
+        <strong>Summary:</strong> ${totalHosts} total hosts |
+        ${recommendedHosts} recommended |
+        ${selectedHosts.length} hosts selected |
+        ${totalLogSources} log sources will be retired
     `;
 }
 
@@ -2253,20 +2300,9 @@ function selectVisibleHosts() {
                 updateHostSelection(hostId, true);
             }
             
-            // Also select all log sources under this host
-            const host = hostAnalysis.find(h => String(h.hostId) === String(hostId));
-            if (host && host.logSources) {
-                console.log('Found host with log sources:', host.logSources.length);
-                host.logSources.forEach(logSource => {
-                    if (logSource.recommended && !selectedLogSources.includes(String(logSource.id))) {
-                        selectedLogSources.push(String(logSource.id));
-                        console.log('Added log source to selection:', logSource.id);
-                    }
-                });
-            }
         }
     });
-    
+
     console.log('Final selectedHosts:', selectedHosts);
     console.log('Final selectedLogSources:', selectedLogSources);
     updateHostSummary();
@@ -2288,22 +2324,6 @@ function selectAllHosts() {
             console.log('Host row not found for ID:', host.hostId);
         }
         
-        // Also select all log sources under this host (both recommended and non-recommended)
-        if (host.logSources) {
-            host.logSources.forEach(logSource => {
-                if (!selectedLogSources.includes(String(logSource.id))) {
-                    selectedLogSources.push(String(logSource.id));
-                    console.log('Added log source to selection:', logSource.id);
-                }
-                
-                // Also check the log source checkbox in the UI
-                const logSourceCheckbox = document.querySelector(`input[onchange*="updateLogSourceSelection('${logSource.id}'"]`);
-                if (logSourceCheckbox && !logSourceCheckbox.checked) {
-                    logSourceCheckbox.checked = true;
-                    console.log('Checked log source checkbox:', logSource.id);
-                }
-            });
-        }
     });
     console.log('Final selectedHosts:', selectedHosts);
     console.log('Final selectedLogSources:', selectedLogSources);
@@ -2315,18 +2335,16 @@ function deselectAllHosts() {
     console.log('Current selectedHosts:', selectedHosts);
     console.log('Current selectedLogSources:', selectedLogSources);
     
-    // Deselect all host checkboxes
-    selectedHosts.forEach(hostId => {
-        const hostRow = document.querySelector(`[data-host-id="${hostId}"]`);
-        if (hostRow) {
-            const checkbox = hostRow.querySelector('input[type="checkbox"]');
-            if (checkbox) {
-                checkbox.checked = false;
-                console.log('Unchecked host checkbox:', hostId);
-            }
+    // Deselect all host checkboxes and clear indeterminate state
+    const allHostRows = document.querySelectorAll('[data-host-id]');
+    allHostRows.forEach(hostRow => {
+        const checkbox = hostRow.querySelector('input[type="checkbox"]');
+        if (checkbox) {
+            checkbox.checked = false;
+            checkbox.indeterminate = false;
         }
     });
-    
+
     // Deselect all log source checkboxes
     const allLogSourceCheckboxes = document.querySelectorAll('input[onchange*="updateLogSourceSelection"]');
     allLogSourceCheckboxes.forEach(checkbox => {
@@ -2356,27 +2374,18 @@ function deselectAllHosts() {
 }
 
 function executeRetirement() {
-    if (selectedHosts.length === 0 && selectedLogSources.length === 0) {
-        showToast('Please select at least one host or log source to retire', 'warning');
+    if (selectedHosts.length === 0) {
+        showToast('Please select at least one host to retire', 'warning');
         return;
     }
-    
+
     // Confirm action
-    const totalLogSourcesFromHosts = selectedHosts.reduce((total, hostId) => {
+    const totalLogSources = selectedHosts.reduce((total, hostId) => {
         const host = hostAnalysis.find(h => String(h.hostId) === String(hostId));
         return total + (host ? host.logSourceCount : 0);
     }, 0);
-    
-    const totalItems = selectedHosts.length + selectedLogSources.length;
-    const totalLogSources = totalLogSourcesFromHosts + selectedLogSources.length;
-    
-    let confirmMessage = `Are you sure you want to retire ${totalItems} items?`;
-    if (selectedHosts.length > 0) {
-        confirmMessage += `\n- ${selectedHosts.length} hosts (${totalLogSourcesFromHosts} log sources)`;
-    }
-    if (selectedLogSources.length > 0) {
-        confirmMessage += `\n- ${selectedLogSources.length} individual log sources`;
-    }
+
+    let confirmMessage = `Are you sure you want to retire ${selectedHosts.length} hosts (${totalLogSources} log sources)?`;
     confirmMessage += `\n\nThis action cannot be undone.`;
     
     if (!confirm(confirmMessage)) {
@@ -2740,6 +2749,37 @@ function handleRollbackConfigSubmit(e) {
     .catch(error => {
         console.error('Error saving rollback configuration:', error);
         showToast('Error saving rollback configuration', 'error');
+    });
+}
+
+function handleLoggingConfigSubmit(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const formData = new FormData(e.target);
+    const loggingConfig = {
+        level: formData.get('logLevel') || 'info',
+        filePath: formData.get('logFilePath') || ''
+    };
+
+    console.log('Saving logging configuration:', loggingConfig);
+    fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ logging: loggingConfig })
+    })
+    .then(response => response.json())
+    .then(() => {
+        const statusEl = document.getElementById('loggingConfigStatus');
+        if (statusEl) {
+            statusEl.textContent = 'Logging settings saved. Restart LRCleaner for changes to take effect.';
+            statusEl.className = 'status-message success';
+        }
+        showToast('Logging settings saved!', 'success');
+    })
+    .catch(error => {
+        console.error('Error saving logging configuration:', error);
+        showToast('Error saving logging configuration', 'error');
     });
 }
 
