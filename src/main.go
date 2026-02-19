@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -43,7 +44,13 @@ type Config struct {
 	Port               int            `json:"port"`
 	ExcludedLogSources []string       `json:"excludedLogSources"`
 	Rollback           RollbackConfig `json:"rollback"`
+	Logging            LoggingConfig  `json:"logging"`
 	// APIKey is now stored securely in OS credential store
+}
+
+type LoggingConfig struct {
+	Level    string `json:"level"`    // "debug", "info", "warn", "error"
+	FilePath string `json:"filePath"` // "" = stdout only
 }
 
 // LogRhythm API structures
@@ -102,8 +109,8 @@ type ApplyRequest struct {
 }
 
 type BackupRequest struct {
-	Password string `json:"password"`
-	Location string `json:"location"`
+	Location   string `json:"location"`
+	SAPassword string `json:"saPassword"` // optional; only sent if Windows auth fails
 }
 
 type RetirementRecord struct {
@@ -219,7 +226,34 @@ var (
 	rollbackMutex   sync.RWMutex
 	// SMA retirement API support (PATCH /lr-admin-api/agents requires 7.22+)
 	smaRetirementSupported bool
+	// Logging
+	logLevel int // 0=debug, 1=info, 2=warn, 3=error
 )
+
+// errSARequired signals that Windows integrated auth failed and SA creds are needed.
+var errSARequired = fmt.Errorf("sa_required")
+
+// Leveled logger functions — thin wrappers around the standard log package.
+func logDebug(format string, v ...interface{}) {
+	if logLevel <= 0 {
+		log.Printf("DEBUG: "+format, v...)
+	}
+}
+func logInfo(format string, v ...interface{}) {
+	if logLevel <= 1 {
+		log.Printf("INFO: "+format, v...)
+	}
+}
+func logWarn(format string, v ...interface{}) {
+	if logLevel <= 2 {
+		log.Printf("WARN: "+format, v...)
+	}
+}
+func logError(format string, v ...interface{}) {
+	if logLevel <= 3 {
+		log.Printf("ERROR: "+format, v...)
+	}
+}
 
 // Credential Manager - Cross-platform secure storage
 const (
@@ -256,7 +290,7 @@ func StoreAPIKey(apiKey string) error {
 		return fmt.Errorf("failed to store API key: %v", err)
 	}
 
-	log.Println("API key stored securely in OS credential store")
+	logInfo("API key stored securely in OS credential store")
 	return nil
 }
 
@@ -287,7 +321,7 @@ func DeleteAPIKey() error {
 		return fmt.Errorf("failed to delete API key: %v", err)
 	}
 
-	log.Println("API key removed from OS credential store")
+	logInfo("API key removed from OS credential store")
 	return nil
 }
 
@@ -301,7 +335,7 @@ func HasAPIKey() bool {
 func GetConfigAPIKey() string {
 	apiKey, err := GetAPIKey()
 	if err != nil {
-		log.Printf("Warning: Failed to get API key from credential store: %v", err)
+		logWarn("Failed to get API key from credential store: %v", err)
 		return ""
 	}
 	return apiKey
@@ -312,9 +346,10 @@ func findAvailablePort() int {
 	fmt.Println("================================================")
 	fmt.Println()
 
-	// Check for command line argument first
-	if len(os.Args) > 1 {
-		if port, err := strconv.Atoi(os.Args[1]); err == nil && port > 0 && port <= 65535 {
+	// Check for first non-flag command line argument (port number)
+	args := flag.Args()
+	if len(args) > 0 {
+		if port, err := strconv.Atoi(args[0]); err == nil && port > 0 && port <= 65535 {
 			if isPortAvailable(port) {
 				fmt.Printf("Using port %d from command line argument\n", port)
 				return port
@@ -385,32 +420,32 @@ func loadRollbackFiles() {
 
 	// Ensure the directory exists (creates it on first startup).
 	if err := os.MkdirAll(rollbackDir, 0755); err != nil {
-		log.Printf("Error creating rollback directory: %v", err)
+		logError("Error creating rollback directory: %v", err)
 		return
 	}
 
 	// Read all JSON files in the rollback directory
 	files, err := filepath.Glob(filepath.Join(rollbackDir, "*.json"))
 	if err != nil {
-		log.Printf("Error reading rollback directory: %v", err)
+		logError("Error reading rollback directory: %v", err)
 		return
 	}
 
-	log.Printf("Found %d rollback files to load", len(files))
+	logInfo("Found %d rollback files to load", len(files))
 
 	loadedCount := 0
 	for _, file := range files {
 		// Read the file
 		data, err := os.ReadFile(file)
 		if err != nil {
-			log.Printf("Error reading rollback file %s: %v", file, err)
+			logError("Error reading rollback file %s: %v", file, err)
 			continue
 		}
 
 		// Parse the rollback data
 		var rollbackData RollbackData
 		if err := json.Unmarshal(data, &rollbackData); err != nil {
-			log.Printf("Error parsing rollback file %s: %v", file, err)
+			logError("Error parsing rollback file %s: %v", file, err)
 			continue
 		}
 
@@ -421,12 +456,12 @@ func loadRollbackFiles() {
 			rollbackData.Checksum = ""
 			jsonForChecksum, err := json.Marshal(&rollbackData)
 			if err != nil {
-				log.Printf("Error re-marshaling rollback data for checksum verification %s: %v", file, err)
+				logError("Error re-marshaling rollback data for checksum verification %s: %v", file, err)
 				continue
 			}
 			expectedChecksum := calculateChecksum(jsonForChecksum)
 			if savedChecksum != expectedChecksum {
-				log.Printf("Checksum mismatch for rollback file %s, skipping", file)
+				logWarn("Checksum mismatch for rollback file %s, skipping", file)
 				continue
 			}
 			rollbackData.Checksum = savedChecksum
@@ -438,15 +473,45 @@ func loadRollbackFiles() {
 		rollbackMutex.Unlock()
 
 		loadedCount++
-		log.Printf("Loaded rollback file: %s (ID: %s)", file, rollbackData.ID)
+		logDebug("Loaded rollback file: %s (ID: %s)", file, rollbackData.ID)
 	}
 
-	log.Printf("Successfully loaded %d rollback files", loadedCount)
+	logInfo("Successfully loaded %d rollback files", loadedCount)
 }
 
 func main() {
+	// Define and parse CLI flags (must happen before loadConfig and findAvailablePort)
+	loglevelFlag := flag.String("loglevel", "", "Log level: debug, info, warn, error")
+	flag.Parse()
+
 	// Initialize configuration
 	config = loadConfig()
+
+	// Resolve log level: CLI flag wins over config
+	resolvedLevel := config.Logging.Level
+	if *loglevelFlag != "" {
+		resolvedLevel = *loglevelFlag
+	}
+	switch strings.ToLower(resolvedLevel) {
+	case "debug":
+		logLevel = 0
+	case "warn":
+		logLevel = 2
+	case "error":
+		logLevel = 3
+	default: // "info" or unrecognized
+		logLevel = 1
+	}
+
+	// Set up log file output if configured
+	if config.Logging.FilePath != "" {
+		logFile, err := os.OpenFile(config.Logging.FilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			log.Printf("WARN: Failed to open log file %s: %v", config.Logging.FilePath, err)
+		} else {
+			log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+		}
+	}
 
 	// Find available port (tries 8080 first, then 8000-8443)
 	port := findAvailablePort()
@@ -593,6 +658,10 @@ func loadConfig() *Config {
 			BackupLocation:    defaultRollbackPath,
 			ChecksumAlgorithm: "sha256",
 		},
+		Logging: LoggingConfig{
+			Level:    "info",
+			FilePath: "",
+		},
 	}
 
 	// Try to load from file
@@ -604,6 +673,7 @@ func loadConfig() *Config {
 			Port               int            `json:"port"`
 			ExcludedLogSources []string       `json:"excludedLogSources"`
 			Rollback           RollbackConfig `json:"rollback"`
+			Logging            LoggingConfig  `json:"logging"`
 		}
 
 		var legacyConfig LegacyConfig
@@ -611,9 +681,9 @@ func loadConfig() *Config {
 			// Migrate API key to credential store if it exists in legacy config
 			if legacyConfig.APIKey != "" {
 				if err := StoreAPIKey(legacyConfig.APIKey); err != nil {
-					log.Printf("Warning: Failed to migrate API key to credential store: %v", err)
+					log.Printf("Warning: Failed to migrate API key to credential store: %v", err) // log.Printf intentional: logLevel not set yet
 				} else {
-					log.Println("API key migrated from config.json to OS credential store")
+					log.Println("API key migrated from config.json to OS credential store") // log.Println intentional: logLevel not set yet
 					// Remove API key from config file
 					legacyConfig.APIKey = ""
 					if updatedData, err := json.MarshalIndent(legacyConfig, "", "  "); err == nil {
@@ -627,6 +697,7 @@ func loadConfig() *Config {
 			config.Port = legacyConfig.Port
 			config.ExcludedLogSources = legacyConfig.ExcludedLogSources
 			config.Rollback = legacyConfig.Rollback
+			config.Logging = legacyConfig.Logging
 
 			// Restore defaults for any zero-value rollback fields so a
 			// partially-written config.json doesn't silently break rollback.
@@ -642,8 +713,13 @@ func loadConfig() *Config {
 			if config.Rollback.ChecksumAlgorithm == "" {
 				config.Rollback.ChecksumAlgorithm = "sha256"
 			}
+
+			// Restore defaults for logging
+			if config.Logging.Level == "" {
+				config.Logging.Level = "info"
+			}
 		} else {
-			log.Printf("Warning: Failed to parse config.json: %v", err)
+			log.Printf("Warning: Failed to parse config.json: %v", err) // log.Printf intentional: logLevel not set yet
 		}
 	}
 
@@ -666,6 +742,7 @@ type ConfigResponse struct {
 	Port               int            `json:"port"`
 	ExcludedLogSources []string       `json:"excludedLogSources"`
 	Rollback           RollbackConfig `json:"rollback"`
+	Logging            LoggingConfig  `json:"logging"`
 	HasAPIKey          bool           `json:"hasApiKey"`
 }
 
@@ -678,28 +755,54 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 			Port:               config.Port,
 			ExcludedLogSources: config.ExcludedLogSources,
 			Rollback:           config.Rollback,
+			Logging:            config.Logging,
 			HasAPIKey:          HasAPIKey(),
 		}
 		json.NewEncoder(w).Encode(response)
 	case "POST":
 		var requestData struct {
-			Hostname string `json:"hostname"`
-			Port     int    `json:"port"`
-			APIKey   string `json:"apiKey"`
+			Hostname string          `json:"hostname"`
+			Port     int             `json:"port"`
+			APIKey   string          `json:"apiKey"`
+			Rollback *RollbackConfig `json:"rollback"`
+			Logging  *LoggingConfig  `json:"logging"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
 			return
 		}
 
-		// Update config with new values
-		config.Hostname = requestData.Hostname
-		config.Port = requestData.Port
+		// Update config with new values (only non-zero fields)
+		if requestData.Hostname != "" {
+			config.Hostname = requestData.Hostname
+		}
+		if requestData.Port != 0 {
+			config.Port = requestData.Port
+		}
+		if requestData.Rollback != nil {
+			config.Rollback = *requestData.Rollback
+			// Restore defaults for zero-value fields
+			if config.Rollback.RetentionDays == 0 {
+				config.Rollback.RetentionDays = 30
+			}
+			if config.Rollback.MaxRollbackPoints == 0 {
+				config.Rollback.MaxRollbackPoints = 10
+			}
+			if config.Rollback.ChecksumAlgorithm == "" {
+				config.Rollback.ChecksumAlgorithm = "sha256"
+			}
+		}
+		if requestData.Logging != nil {
+			config.Logging = *requestData.Logging
+			if config.Logging.Level == "" {
+				config.Logging.Level = "info"
+			}
+		}
 
 		// Save API key to credential store if provided and not already stored
 		if requestData.APIKey != "" && requestData.APIKey != "***STORED***" {
 			if err := StoreAPIKey(requestData.APIKey); err != nil {
-				log.Printf("Error storing API key: %v", err)
+				logError("Error storing API key: %v", err)
 				http.Error(w, "Failed to store API key", http.StatusInternalServerError)
 				return
 			}
@@ -708,12 +811,12 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		// Save config to file (without API key)
 		data, err := json.MarshalIndent(config, "", "  ")
 		if err != nil {
-			log.Printf("Error marshaling config: %v", err)
+			logError("Error marshaling config: %v", err)
 			http.Error(w, "Failed to save configuration", http.StatusInternalServerError)
 			return
 		}
 		if err := os.WriteFile("config.json", data, 0644); err != nil {
-			log.Printf("Error writing config file: %v", err)
+			logError("Error writing config file: %v", err)
 			http.Error(w, "Failed to save configuration", http.StatusInternalServerError)
 			return
 		}
@@ -750,7 +853,7 @@ func handleAPIKey(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := StoreAPIKey(request.APIKey); err != nil {
-			log.Printf("Error storing API key: %v", err)
+			logError("Error storing API key: %v", err)
 			http.Error(w, "Failed to store API key", http.StatusInternalServerError)
 			return
 		}
@@ -761,7 +864,7 @@ func handleAPIKey(w http.ResponseWriter, r *http.Request) {
 	case "DELETE":
 		// Remove API key
 		if err := DeleteAPIKey(); err != nil {
-			log.Printf("Error deleting API key: %v", err)
+			logError("Error deleting API key: %v", err)
 			http.Error(w, "Failed to delete API key", http.StatusInternalServerError)
 			return
 		}
@@ -775,7 +878,7 @@ func handleAPIKeyValue(w http.ResponseWriter, r *http.Request) {
 	// Get the actual API key value
 	apiKey, err := GetAPIKey()
 	if err != nil {
-		log.Printf("Error retrieving API key: %v", err)
+		logError("Error retrieving API key: %v", err)
 		http.Error(w, "Failed to retrieve API key", http.StatusInternalServerError)
 		return
 	}
@@ -936,15 +1039,17 @@ func handleBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Password == "" {
-		http.Error(w, "Password is required", http.StatusBadRequest)
-		return
-	}
-
-	// Perform SQL backup
-	success, err := performSQLBackup(req.Password, req.Location)
+	success, err := performSQLBackup(req.SAPassword, req.Location)
 	if err != nil {
-		log.Printf("Backup error: %v", err)
+		if err == errSARequired {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":  "sa_required",
+				"message": "Windows integrated auth insufficient; please provide the SA password",
+			})
+			return
+		}
+		logError("Backup error: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
@@ -960,43 +1065,29 @@ func handleBackup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func performSQLBackup(password, location string) (bool, error) {
-	// Sanitize location to prevent SQL injection - only allow alphanumeric, backslash, colon, underscore, hyphen, period, and forward slash
+// sanitizeBackupLocation validates a backup path to prevent SQL injection.
+func sanitizeBackupLocation(location string) error {
 	for _, ch := range location {
 		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
 			ch == '\\' || ch == '/' || ch == ':' || ch == '_' || ch == '-' || ch == '.' || ch == ' ') {
-			return false, fmt.Errorf("invalid character in backup location: %c", ch)
+			return fmt.Errorf("invalid character in backup location: %c", ch)
 		}
 	}
 	if strings.Contains(location, "'") || strings.Contains(location, ";") || strings.Contains(location, "--") {
-		return false, fmt.Errorf("backup location contains disallowed characters")
+		return fmt.Errorf("backup location contains disallowed characters")
 	}
+	return nil
+}
 
-	// SQL Server connection string
-	// Assuming LogRhythmEMDB is on localhost with default instance
-	connectionString := fmt.Sprintf("server=localhost;user id=logrhythmadmin;password=%s;database=LogRhythmEMDB;encrypt=disable", password)
-
-	// Open database connection
-	db, err := sql.Open("mssql", connectionString)
-	if err != nil {
-		return false, fmt.Errorf("failed to connect to database: %v", err)
-	}
-	defer db.Close()
-
-	// Test connection
-	if err := db.Ping(); err != nil {
-		return false, fmt.Errorf("failed to ping database: %v", err)
-	}
-
-	// Create backup filename with timestamp
+// execSQLBackup runs the BACKUP DATABASE statement against an already-connected db.
+func execSQLBackup(db *sql.DB, location string) (bool, error) {
 	timestamp := time.Now().Format("20060102_150405")
 	backupFile := fmt.Sprintf("%s\\LogRhythmEMDB_backup_%s.bak", location, timestamp)
 
-	// Execute backup command using sp_executesql with parameterized path
-	backupQuery := fmt.Sprintf("BACKUP DATABASE [LogRhythmEMDB] TO DISK = @backupPath WITH FORMAT, INIT, NAME = 'LogRhythmEMDB Full Backup', SKIP, NOREWIND, NOUNLOAD, STATS = 10")
-	_, err = db.Exec("EXEC sp_executesql @stmt=N'"+backupQuery+"', @params=N'@backupPath NVARCHAR(500)', @backupPath=@p1", backupFile)
+	backupQuery := "BACKUP DATABASE [LogRhythmEMDB] TO DISK = @backupPath WITH FORMAT, INIT, NAME = 'LogRhythmEMDB Full Backup', SKIP, NOREWIND, NOUNLOAD, STATS = 10"
+	_, err := db.Exec("EXEC sp_executesql @stmt=N'"+backupQuery+"', @params=N'@backupPath NVARCHAR(500)', @backupPath=@p1", backupFile)
 	if err != nil {
-		// Fallback: try direct execution with sanitized path (already validated above)
+		// Fallback: direct execution with the sanitized (already validated) path
 		directQuery := fmt.Sprintf("BACKUP DATABASE [LogRhythmEMDB] TO DISK = N'%s' WITH FORMAT, INIT, NAME = 'LogRhythmEMDB Full Backup', SKIP, NOREWIND, NOUNLOAD, STATS = 10", backupFile)
 		_, err = db.Exec(directQuery)
 		if err != nil {
@@ -1004,8 +1095,42 @@ func performSQLBackup(password, location string) (bool, error) {
 		}
 	}
 
-	log.Printf("Database backup completed successfully: %s", backupFile)
+	logInfo("Database backup completed successfully: %s", backupFile)
 	return true, nil
+}
+
+func performSQLBackup(saPassword, location string) (bool, error) {
+	if err := sanitizeBackupLocation(location); err != nil {
+		return false, err
+	}
+
+	// 1. Try Windows Integrated Authentication (Administrators group)
+	winConnStr := "sqlserver://localhost?trusted_connection=yes&database=LogRhythmEMDB"
+	if winDB, err := sql.Open("mssql", winConnStr); err == nil {
+		if pingErr := winDB.Ping(); pingErr == nil {
+			defer winDB.Close()
+			return execSQLBackup(winDB, location)
+		}
+		winDB.Close()
+	}
+
+	// 2. Windows auth failed — try SA fallback
+	if saPassword == "" {
+		return false, errSARequired
+	}
+
+	saConnStr := fmt.Sprintf("sqlserver://sa:%s@localhost?database=LogRhythmEMDB", saPassword)
+	saDB, err := sql.Open("mssql", saConnStr)
+	if err != nil {
+		return false, fmt.Errorf("failed to open SA connection: %v", err)
+	}
+	defer saDB.Close()
+
+	if err := saDB.Ping(); err != nil {
+		return false, fmt.Errorf("SA authentication failed: %v", err)
+	}
+
+	return execSQLBackup(saDB, location)
 }
 
 func handleApplyMode(w http.ResponseWriter, r *http.Request) {

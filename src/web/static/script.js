@@ -537,6 +537,10 @@ function setupEventListeners() {
     // Rollback configuration form
     const rollbackConfigForm = document.getElementById('rollbackConfigForm');
     if (rollbackConfigForm) rollbackConfigForm.addEventListener('submit', handleRollbackConfigSubmit);
+
+    // Logging configuration form
+    const loggingConfigForm = document.getElementById('loggingConfigForm');
+    if (loggingConfigForm) loggingConfigForm.addEventListener('submit', handleLoggingConfigSubmit);
 }
 
 function loadConfiguration() {
@@ -559,6 +563,14 @@ function loadConfiguration() {
             
             document.getElementById('hostname').value = config.hostname || '';
             document.getElementById('port').value = config.port || 8501;
+
+            // Populate logging config fields
+            if (config.logging) {
+                const logLevelEl = document.getElementById('logLevel');
+                if (logLevelEl) logLevelEl.value = config.logging.level || 'info';
+                const logFilePathEl = document.getElementById('logFilePath');
+                if (logFilePathEl) logFilePathEl.value = config.logging.filePath || '';
+            }
             
             // Handle API key from credential store
             const apiKeyInput = document.getElementById('apiKey');
@@ -1784,6 +1796,13 @@ function openApplyModal() {
 
 function openBackupModal() {
     closeAllModals();
+    // Reset SA password section on each open
+    const saSection = document.getElementById('saPasswordSection');
+    if (saSection) saSection.style.display = 'none';
+    const saPasswordInput = document.getElementById('saPassword');
+    if (saPasswordInput) saPasswordInput.value = '';
+    const statusDiv = document.getElementById('backupModalStatus');
+    if (statusDiv) { statusDiv.textContent = ''; statusDiv.className = 'status-message'; }
     document.getElementById('backupModal').style.display = 'block';
 }
 
@@ -1798,36 +1817,45 @@ function backToBackupModal() {
 }
 
 function executeBackup() {
-    const password = document.getElementById('backupPassword').value;
-    const location = document.getElementById('backupLocation').value;
-    
-    if (!password) {
-        showToast('Please enter the password for logrhythmadmin', 'error');
-        return;
-    }
-    
-    closeAllModals();
+    const location = document.getElementById('backupLocation').value || 'C:\\LogRhythm\\Backup';
+    const saPasswordInput = document.getElementById('saPassword');
+    const saPassword = saPasswordInput ? saPasswordInput.value : '';
+    const saSection = document.getElementById('saPasswordSection');
+    const statusDiv = document.getElementById('backupModalStatus');
+
     showLoadingOverlay();
-    
+
     fetch('/api/backup', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ 
-            password: password,
-            location: location || 'C:\\LogRhythm\\Backup'
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location, saPassword })
     })
     .then(response => response.json())
     .then(data => {
+        hideLoadingOverlay();
         if (data.success) {
+            // Clear SA password from memory immediately
+            if (saPasswordInput) saPasswordInput.value = '';
+            if (saSection) saSection.style.display = 'none';
+            closeAllModals();
             showToast('Database backup completed successfully', 'success');
             openApplyConfigModal();
+        } else if (data.status === 'sa_required') {
+            // Show SA password field for retry
+            if (saSection) saSection.style.display = 'block';
+            if (statusDiv) {
+                statusDiv.textContent = '';
+                statusDiv.className = 'status-message';
+            }
         } else {
-            showToast(data.error || 'Backup failed', 'error');
+            const msg = data.error || 'Backup failed';
+            if (statusDiv) {
+                statusDiv.textContent = msg;
+                statusDiv.className = 'status-message error';
+            } else {
+                showToast(msg, 'error');
+            }
         }
-        hideLoadingOverlay();
     })
     .catch(error => {
         console.error('Error performing backup:', error);
@@ -2105,12 +2133,14 @@ function updateHostSelection(hostId, selected) {
     
     console.log('Updated selectedHosts:', selectedHosts);
     
-    // Update visual state
+    // Update visual state and clear indeterminate (explicit host check/uncheck)
     const hostItem = document.querySelector(`[data-host-id="${hostId}"]`);
     if (hostItem) {
         hostItem.classList.toggle('selected', selected);
+        const hostCheckbox = hostItem.querySelector('input[type="checkbox"]');
+        if (hostCheckbox) hostCheckbox.indeterminate = false;
     }
-    
+
     // Automatically select/deselect all log sources under this host
     const host = hostAnalysis.find(h => String(h.hostId) === String(hostId));
     if (host && host.logSources) {
@@ -2179,26 +2209,31 @@ function updateLogSourceSelection(logSourceId, selected) {
         const parentHostId = String(parentHost.hostId);
         const allChildIds = parentHost.logSources.map(ls => String(ls.id));
         const allChildrenSelected = allChildIds.every(id => selectedLogSources.includes(id));
+        const someChildrenSelected = allChildIds.some(id => selectedLogSources.includes(id));
 
         const hostRow = document.querySelector(`[data-host-id="${parentHostId}"]`);
         const hostCheckbox = hostRow ? hostRow.querySelector('input[type="checkbox"]') : null;
 
         if (allChildrenSelected) {
-            // All children selected → auto-check parent host
+            // All children selected → parent fully checked
             if (!selectedHosts.includes(parentHostId)) {
                 selectedHosts.push(parentHostId);
                 if (hostRow) hostRow.classList.add('selected');
-                if (hostCheckbox) hostCheckbox.checked = true;
-                console.log('Auto-selected parent host:', parentHostId);
             }
+            if (hostCheckbox) { hostCheckbox.checked = true; hostCheckbox.indeterminate = false; }
+            console.log('Auto-selected parent host:', parentHostId);
+        } else if (someChildrenSelected) {
+            // Some children selected → indeterminate parent
+            selectedHosts = selectedHosts.filter(id => id !== parentHostId);
+            if (hostRow) hostRow.classList.remove('selected');
+            if (hostCheckbox) { hostCheckbox.checked = false; hostCheckbox.indeterminate = true; }
+            console.log('Partial selection — indeterminate parent host:', parentHostId);
         } else {
-            // Not all children selected → auto-uncheck parent host
-            if (selectedHosts.includes(parentHostId)) {
-                selectedHosts = selectedHosts.filter(id => id !== parentHostId);
-                if (hostRow) hostRow.classList.remove('selected');
-                if (hostCheckbox) hostCheckbox.checked = false;
-                console.log('Auto-deselected parent host:', parentHostId);
-            }
+            // No children selected → parent unchecked
+            selectedHosts = selectedHosts.filter(id => id !== parentHostId);
+            if (hostRow) hostRow.classList.remove('selected');
+            if (hostCheckbox) { hostCheckbox.checked = false; hostCheckbox.indeterminate = false; }
+            console.log('Auto-deselected parent host:', parentHostId);
         }
     }
 
@@ -2300,18 +2335,16 @@ function deselectAllHosts() {
     console.log('Current selectedHosts:', selectedHosts);
     console.log('Current selectedLogSources:', selectedLogSources);
     
-    // Deselect all host checkboxes
-    selectedHosts.forEach(hostId => {
-        const hostRow = document.querySelector(`[data-host-id="${hostId}"]`);
-        if (hostRow) {
-            const checkbox = hostRow.querySelector('input[type="checkbox"]');
-            if (checkbox) {
-                checkbox.checked = false;
-                console.log('Unchecked host checkbox:', hostId);
-            }
+    // Deselect all host checkboxes and clear indeterminate state
+    const allHostRows = document.querySelectorAll('[data-host-id]');
+    allHostRows.forEach(hostRow => {
+        const checkbox = hostRow.querySelector('input[type="checkbox"]');
+        if (checkbox) {
+            checkbox.checked = false;
+            checkbox.indeterminate = false;
         }
     });
-    
+
     // Deselect all log source checkboxes
     const allLogSourceCheckboxes = document.querySelectorAll('input[onchange*="updateLogSourceSelection"]');
     allLogSourceCheckboxes.forEach(checkbox => {
@@ -2716,6 +2749,37 @@ function handleRollbackConfigSubmit(e) {
     .catch(error => {
         console.error('Error saving rollback configuration:', error);
         showToast('Error saving rollback configuration', 'error');
+    });
+}
+
+function handleLoggingConfigSubmit(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const formData = new FormData(e.target);
+    const loggingConfig = {
+        level: formData.get('logLevel') || 'info',
+        filePath: formData.get('logFilePath') || ''
+    };
+
+    console.log('Saving logging configuration:', loggingConfig);
+    fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ logging: loggingConfig })
+    })
+    .then(response => response.json())
+    .then(() => {
+        const statusEl = document.getElementById('loggingConfigStatus');
+        if (statusEl) {
+            statusEl.textContent = 'Logging settings saved. Restart LRCleaner for changes to take effect.';
+            statusEl.className = 'status-message success';
+        }
+        showToast('Logging settings saved!', 'success');
+    })
+    .catch(error => {
+        console.error('Error saving logging configuration:', error);
+        showToast('Error saving logging configuration', 'error');
     });
 }
 
